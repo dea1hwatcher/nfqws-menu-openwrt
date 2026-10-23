@@ -881,7 +881,7 @@ ensure_openwrt_feed_key() {
     # apk: ключ .pem кладётся в /etc/apk/keys (проверка подписи автоматическая)
     local pem="${APK_KEYS_DIR}/${feed}.pem"
     mkdir -p "$APK_KEYS_DIR" || { error "Не создать $APK_KEYS_DIR."; return 1; }
-    if ! _http_get_file "https://nfqws.github.io/$feed/openwrt/$feed.pem" "$pem"; then
+    if ! download_file "https://nfqws.github.io/$feed/openwrt/$feed.pem" "$pem"; then
       error "Не удалось скачать ключ фида $feed (.pem)."
       return 1
     fi
@@ -893,7 +893,7 @@ ensure_openwrt_feed_key() {
     error "opkg-key не найден — установка подписанных пакетов OpenWrt невозможна."
     return 1
   fi
-  if ! _http_get_file "https://nfqws.github.io/$feed/openwrt/$feed.pub" "$key_file"; then
+  if ! download_file "https://nfqws.github.io/$feed/openwrt/$feed.pub" "$key_file"; then
     error "Не удалось скачать GPG-ключ фида $feed."
     return 1
   fi
@@ -1430,10 +1430,10 @@ show_installed() {
         row("awg-openwrt", aver, m)
       }
       if ("luci-app-telemt" in opkg) {
+        tver = ("telemt" in opkg) ? opkg["telemt"] : opkg["luci-app-telemt"]
         m = mark_run(proc_has("telemt")) mark_upd("luci-app-telemt", opkg["luci-app-telemt"])
-        row("luci-app-telemt", opkg["luci-app-telemt"], m)
-      }
-      if ("telemt" in opkg) {
+        row("luci-app-telemt", tver, m)
+      } else if ("telemt" in opkg) {
         m = mark_run(proc_has("telemt")) mark_upd("telemt", opkg["telemt"])
         row("telemt", opkg["telemt"], m)
       } else if ("telemt" in tools) {
@@ -3482,7 +3482,8 @@ _fetch_geohide_domains() {
 }
 
 owrt_bind_domains_to_port() {
-  local doms="$1" port="$2" d count=0 cur_routes
+  local doms="$1" port="$2" d count=0 cur_routes NL='
+'
   [ -n "$doms" ] && [ -n "$port" ] || return 1
   if ! uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
     uci add dhcp dnsmasq >/dev/null
@@ -3492,12 +3493,12 @@ owrt_bind_domains_to_port() {
     [ -n "$d" ] || continue
     case "$d" in '#'*|'//'*) continue ;; esac
     # Если уже привязан к этому же порту — пропускаем
-    case "$cur_routes" in
-      *"${d}|${port}"*) continue ;;
+    case "${NL}${cur_routes}${NL}" in
+      *"${NL}${d}|${port}${NL}"*) continue ;;
     esac
     # Если был привязан к другому порту — удаляем старую привязку без reload
-    case "$cur_routes" in
-      *"${d}|"*) owrt_route_del "$d" 1 >/dev/null 2>&1 || true ;;
+    case "${NL}${cur_routes}${NL}" in
+      *"${NL}${d}|"*) owrt_route_del "$d" 1 >/dev/null 2>&1 || true ;;
     esac
     if uci -q add_list "dhcp.@dnsmasq[0].server=/$d/127.0.0.1#$port"; then
       count=$((count + 1))
@@ -3861,13 +3862,20 @@ host_entries_apply() {
   cat "$1" >> "$merged"
   {
     printf '%s\n' "$HOSTS_MARK_BEGIN"
-    # при повторе домена побеждает более позднее значение (новый IP)
+    # сохраняем уникальные пары IP DOMAIN в исходном порядке
     awk -F '\t' '
       NF >= 2 && $1 != "" && $2 != "" {
-        if (!($2 in seen)) { seen[$2] = 1; order[++n] = $2 }
-        dom[$2] = $1
+        pair = $1 "\t" $2
+        if (!seen[pair]++) {
+          order[++n] = pair
+        }
       }
-      END { for (i = 1; i <= n; i++) print dom[order[i]] " " order[i] }
+      END {
+        for (i = 1; i <= n; i++) {
+          split(order[i], p, "\t")
+          print p[1] " " p[2]
+        }
+      }
     ' "$merged" > "${block}.body"
     cat "${block}.body"
     printf '%s\n' "$HOSTS_MARK_END"
@@ -3876,7 +3884,7 @@ host_entries_apply() {
   hosts_strip_block /etc/hosts > "${block}.base"
   cat "${block}.base" "$block" > /etc/hosts
   rm -f "$block" "${block}.base" "${block}.body" "$merged"
-  info "Записано: /etc/hosts (доменов в блоке: ${n_dom:-0})."
+  info "Записано: /etc/hosts (записей в блоке: ${n_dom:-0})."
   reload_dns_service
 }
 
@@ -4036,8 +4044,8 @@ $name"
       insec && NF >= 2 {
         ip = $1
         domain = $2
-        # IPv6 не поддерживается командой ip host
-        if (ip ~ /:/) next
+        # отсекаем некорректные IP (IPv4 / IPv6)
+        if (ip !~ /^[0-9a-fA-F.:]+$/) next
         # битые/пустые домены (objects..com, .com, my..org)
         if (domain == "" || domain ~ /^\./ || domain ~ /\.\./ || domain !~ /\./) next
         print ip "\t" domain
@@ -4048,14 +4056,14 @@ $selected_secs
 EOF
 
   if [ ! -s "$pairs" ]; then
-    warn "В выбранных секциях нет валидных записей IPv4 DOMAIN."
+    warn "В выбранных секциях нет валидных записей IP DOMAIN."
     rm -f "$tmp" "$sec_file" "$pairs"
     return 0
   fi
 
-  # Один IP на домен (последний) — ip host хранит одну запись на имя
+  # Уникальные пары IP<TAB>DOMAIN
   local pairs_uniq="/tmp/nfqws-hosts-uniq-$$.txt"
-  awk -F '\t' '{ dom[$2] = $1 } END { for (d in dom) print dom[d] "\t" d }' "$pairs" > "$pairs_uniq"
+  awk -F '\t' '!seen[$1, $2]++' "$pairs" > "$pairs_uniq"
 
   host_entries_apply "$pairs_uniq"
 
@@ -5842,14 +5850,21 @@ opkg_upgrade_all() {
       return 1
     fi
   else
-    info "opkg update && opkg upgrade ..."
+    info "opkg update ..."
     if ! opkg update; then
       error "opkg update не удался."
       return 1
     fi
-    if ! opkg upgrade; then
-      error "opkg upgrade не удался."
-      return 1
+    local pkgs
+    pkgs=$(opkg list-upgradable 2>/dev/null | awk '{print $1}')
+    if [ -n "$pkgs" ]; then
+      info "Обновление доступных пакетов: $(printf '%s ' $pkgs)"
+      if ! opkg upgrade $pkgs; then
+        error "opkg upgrade не удался."
+        return 1
+      fi
+    else
+      info "Все пакеты opkg уже обновлены."
     fi
   fi
   refresh_opkg_cache
@@ -6130,13 +6145,15 @@ service_mirror_menu() {
 
 # Починить базу OPKG status: NUL-байты и склеенные записи (из-за аварийного отключения питания) -> segfault opkg
 _opkg_repair_status() {
-  local st="" bak tmp fixed n0 n1 nuls candidate
-  for candidate in /usr/lib/opkg/status /var/lib/opkg/status /opt/lib/opkg/status; do
-    if [ -f "$candidate" ]; then
-      st="$candidate"
-      break
-    fi
-  done
+  local st="${1:-}" bak tmp fixed n0 n1 nuls candidate
+  if [ -z "$st" ]; then
+    for candidate in /usr/lib/opkg/status /var/lib/opkg/status /opt/lib/opkg/status; do
+      if [ -f "$candidate" ]; then
+        st="$candidate"
+        break
+      fi
+    done
+  fi
   [ -n "$st" ] && [ -f "$st" ] || {
     return 0
   }
@@ -6672,6 +6689,11 @@ ensure_menu_symlink() {
 }
 
 ensure_menu_symlink
+
+# Не запускаем интерактивное меню, если скрипт подключён через source/.
+if (return 0 2>/dev/null); then
+  return 0
+fi
 
 if ! command -v opkg >/dev/null 2>&1 && ! command -v apk >/dev/null 2>&1; then
   error "Пакетный менеджер (opkg/apk) не найден."
