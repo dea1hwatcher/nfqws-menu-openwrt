@@ -76,7 +76,7 @@
 | `--hostlist=` / `--ipset=` | `MODE_LIST` / `NFQWS_ARGS_IPSET` |
 
 Числа `seqovl` — это ровно размеры блобов: `tls_clienthello_www_google_com.bin` = 681 б,
-`tls_clienthello_max_ru.bin` = 664 б, `stun2.bin` = 120 б (в EXP берётся 480 — приставка
+`tls_clienthello_www_sferum_ru.bin` = 664 б, `stun2.bin` = 120 б (в EXP берётся 480 — приставка
 длиннее блоба, добивается повторами/нулями).
 
 ## Что важно знать

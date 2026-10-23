@@ -11,7 +11,7 @@
 
 set -e
 
-SCRIPT_VERSION="0.1.6"
+SCRIPT_VERSION="0.1.7"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
@@ -209,6 +209,7 @@ ui_apply_lang() {
       LBL_REMOVE="СЕРВИС"
       LBL_S1="Сжать bin/sbin (UPX)"
       LBL_S2="Сменить / проверить зеркала OpenWrt"
+      LBL_S3="Починить базу OPKG (NUL/битый status)"
       LBL_U="Обновить все пакеты"
       LBL_1="Установка NFQWS / NFQWS2"
       LBL_3="Выбор стратегии"
@@ -253,6 +254,7 @@ ui_apply_lang() {
       LBL_REMOVE="SERVICE"
       LBL_S1="Compress bin/sbin (UPX)"
       LBL_S2="Switch / test OpenWrt repository mirrors"
+      LBL_S3="Repair OPKG database (corrupt/NUL status)"
       LBL_U="Upgrade all packages"
       LBL_1="Install NFQWS / NFQWS2"
       LBL_3="Select strategy"
@@ -1579,31 +1581,67 @@ ask_web_install() {
 install_nfqws1() {
   need_arch || return 1
   info "Установка nfqws-keenetic (версия 1)..."
+  if is_installed "nfqws2-keenetic"; then
+    warn "Обнаружен nfqws2-keenetic. Пакеты конфликтуют — nfqws-keenetic нельзя ставить вместе с nfqws2."
+    if confirm_no "Удалить nfqws2-keenetic (и веб-интерфейс) перед установкой nfqws-keenetic?"; then
+      stop_nfqws2_hard
+      pkg_remove nfqws-keenetic-web nfqws2-keenetic 2>/dev/null || true
+      stop_nfqws2_hard
+      refresh_opkg_cache
+    else
+      warn "Установка nfqws-keenetic отменена (nfqws2-keenetic остаётся)."
+      return 1
+    fi
+  fi
   install_deps
   ensure_openwrt_feed_key "nfqws-keenetic" || return 1
   ensure_opkg_repo "nfqws-keenetic" "$(nfqws_feed_url nfqws-keenetic)"
-  pkg_install nfqws-keenetic
-  info "nfqws-keenetic установлен."
-  ask_web_install
+  if pkg_install nfqws-keenetic; then
+    refresh_opkg_cache
+    if is_installed "nfqws-keenetic"; then
+      info "nfqws-keenetic установлен."
+      ask_web_install
+    else
+      error "opkg не сообщил об ошибке, но пакет nfqws-keenetic не установлен."
+      return 1
+    fi
+  else
+    error "Не удалось установить nfqws-keenetic (конфликт или ошибка opkg)."
+    return 1
+  fi
 }
 
 install_nfqws2() {
   need_arch || return 1
   info "Установка nfqws2-keenetic (версия 2)..."
   if is_installed "nfqws-keenetic"; then
-    warn "Обнаружен nfqws-keenetic. Рекомендуется удалить его перед установкой nfqws2."
-    if confirm_no "Удалить nfqws-keenetic и веб-интерфейс?"; then
+    warn "Обнаружен nfqws-keenetic. Пакеты конфликтуют — nfqws2 нельзя ставить вместе с nfqws-keenetic."
+    if confirm_no "Удалить nfqws-keenetic (и веб-интерфейс) перед установкой nfqws2?"; then
       stop_nfqws1_hard
       pkg_remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
       stop_nfqws1_hard
+      refresh_opkg_cache
+    else
+      warn "Установка nfqws2-keenetic отменена (nfqws-keenetic остаётся)."
+      return 1
     fi
   fi
   install_deps
   ensure_openwrt_feed_key "nfqws2-keenetic" || return 1
   ensure_opkg_repo "nfqws2-keenetic" "$(nfqws_feed_url nfqws2-keenetic)"
-  pkg_install nfqws2-keenetic
-  info "nfqws2-keenetic установлен."
-  ask_web_install
+  if pkg_install nfqws2-keenetic; then
+    refresh_opkg_cache
+    if is_installed "nfqws2-keenetic"; then
+      info "nfqws2-keenetic установлен."
+      ask_web_install
+    else
+      error "opkg не сообщил об ошибке, но пакет nfqws2-keenetic не установлен."
+      return 1
+    fi
+  else
+    error "Не удалось установить nfqws2-keenetic (конфликт или ошибка opkg)."
+    return 1
+  fi
 }
 
 # Версия из raw VERSION (fetch_url → зеркала jsDelivr/ghproxy)
@@ -1698,6 +1736,39 @@ install_package_direct() {
     rm -f "$dest"
     return 1
   fi
+
+  case "$pkg" in
+    nfqws-keenetic)
+      if is_installed "nfqws2-keenetic"; then
+        warn "Обнаружен nfqws2-keenetic. Пакеты конфликтуют — nfqws-keenetic нельзя ставить вместе с nfqws2."
+        if confirm_no "Удалить nfqws2-keenetic (и веб-интерфейс) перед установкой nfqws-keenetic?"; then
+          stop_nfqws2_hard
+          pkg_remove nfqws-keenetic-web nfqws2-keenetic 2>/dev/null || true
+          stop_nfqws2_hard
+          refresh_opkg_cache
+        else
+          warn "Установка nfqws-keenetic отменена (nfqws2-keenetic остаётся)."
+          rm -f "$dest"
+          return 1
+        fi
+      fi
+      ;;
+    nfqws2-keenetic)
+      if is_installed "nfqws-keenetic"; then
+        warn "Обнаружен nfqws-keenetic. Пакеты конфликтуют — nfqws2 нельзя ставить вместе с nfqws-keenetic."
+        if confirm_no "Удалить nfqws-keenetic (и веб-интерфейс) перед установкой nfqws2?"; then
+          stop_nfqws1_hard
+          pkg_remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
+          stop_nfqws1_hard
+          refresh_opkg_cache
+        else
+          warn "Установка nfqws2-keenetic отменена (nfqws-keenetic остаётся)."
+          rm -f "$dest"
+          return 1
+        fi
+      fi
+      ;;
+  esac
 
   # Остановка сервиса перед обновлением бинарника
   case "$pkg" in
@@ -5429,13 +5500,22 @@ list_repo_blobs() {
 
   printf '%s\n' \
     ACTIVE_DISCORD_UDP.bin ACTIVE_GAME_UDP.bin \
-    quic_initial_4pda_to.bin quic_initial_5ka_ru.bin quic_initial_rutube_ru.bin \
-    quic_initial_steamcommunity_com.bin quic_initial_tencent_com.bin \
-    quic_initial_www_google_com.bin \
+    discord-ip-discovery-without-port.bin \
+    quic_initial.bin quic_initial_4pda_to.bin quic_initial_5ka_ru.bin \
+    quic_initial_dbankcloud_ru.bin quic_initial_leagueoflegends.com.bin \
+    quic_initial_lemana_pro.bin quic_initial_rr1kyber2.bin quic_initial_rutube_ru.bin \
+    quic_initial_steam_chat_com.bin quic_initial_steamcommunity_com.bin \
+    quic_initial_steamstatic_com.bin quic_initial_tencent_com.bin \
+    quic_initial_vk_com.bin quic_initial_www_google_com.bin \
+    quic_lordfilm.bin quic_my_youtube_initial.bin \
     stun.bin stun2.bin \
+    tls_burgerkingrus_ru.bin tls_cf1.bin tls_clienthello.bin \
     tls_clienthello_4pda_to.bin tls_clienthello_5ka_ru.bin \
-    tls_clienthello_max_ru.bin tls_clienthello_sochi_park.bin \
-    tls_clienthello_www_google_com.bin
+    tls_clienthello_awswaf_com.bin tls_clienthello_max_ru.bin \
+    tls_clienthello_sochi_park.bin tls_clienthello_steam_chat_com.bin \
+    tls_clienthello_steamstatic_com.bin tls_clienthello_teamspeak_com.bin \
+    tls_clienthello_www_google_com.bin tls_clienthello_www_sferum_ru.bin \
+    tls_lordfilm.bin tls_magnit.bin
 }
 
 
@@ -6048,12 +6128,82 @@ service_mirror_menu() {
   done
 }
 
+# Починить базу OPKG status: NUL-байты и склеенные записи (из-за аварийного отключения питания) -> segfault opkg
+_opkg_repair_status() {
+  local st="" bak tmp fixed n0 n1 nuls candidate
+  for candidate in /usr/lib/opkg/status /var/lib/opkg/status /opt/lib/opkg/status; do
+    if [ -f "$candidate" ]; then
+      st="$candidate"
+      break
+    fi
+  done
+  [ -n "$st" ] && [ -f "$st" ] || {
+    return 0
+  }
+
+  nuls=$(tr -cd '\000' < "$st" 2>/dev/null | wc -c | tr -d ' \n')
+  case "$nuls" in ''|*[!0-9]*) nuls=0 ;; esac
+  if [ "$nuls" -eq 0 ]; then
+    return 0
+  fi
+
+  warn "Повреждён $st ($nuls NUL-байт) — восстанавливаю..."
+  bak="${st}.bak.corrupt.$(date +%Y%m%d%H%M%S)"
+  cp -a "$st" "$bak" 2>/dev/null || true
+  info "  Бэкап: $bak"
+  tmp="/tmp/opkg-status-$$.nonul"
+  fixed="/tmp/opkg-status-$$.fixed"
+  tr -d '\000' < "$st" > "$tmp" 2>/dev/null || cp "$st" "$tmp"
+  awk 'BEGIN{RS="";ORS="\n\n"} /^Package: / && /Status: / {print}' "$tmp" > "$fixed"
+  n0=$(grep -c '^Package:' "$st" 2>/dev/null || echo 0)
+  n1=$(grep -c '^Package:' "$fixed" 2>/dev/null || echo 0)
+  if [ ! -s "$fixed" ]; then
+    error "  Не удалось восстановить базу $st"
+    rm -f "$tmp" "$fixed"
+    return 1
+  fi
+  cp "$fixed" "$st"
+  info "  База opkg восстановлена: записей ~$n0 -> $n1 (NUL-байты удалены)."
+  rm -f "$tmp" "$fixed"
+  return 0
+}
+
+service_opkg_repair() {
+  echo
+  info "$LBL_S3"
+  local st="" candidate
+  for candidate in /usr/lib/opkg/status /var/lib/opkg/status /opt/lib/opkg/status; do
+    if [ -f "$candidate" ]; then
+      st="$candidate"
+      break
+    fi
+  done
+  if [ -z "$st" ]; then
+    error "Файл базы opkg status не найден."
+    pause
+    return 1
+  fi
+
+  info "Проверка базы: $st"
+  if _opkg_repair_status; then
+    info "База проверена."
+  fi
+  info "Проверка целостности вызовом opkg list-installed..."
+  if opkg list-installed >/dev/null 2>&1; then
+    info "OPKG работает штатно."
+  else
+    warn "opkg всё ещё сообщает об ошибке."
+  fi
+  pause
+}
+
 menu_service() {
   while true; do
     echo
     printf '%s\n' "${BOLD}${CYAN}[::]  ${LBL_REMOVE} (S)${NC}"
     echo "      1. $LBL_S1"
     echo "      2. $LBL_S2"
+    echo "      3. $LBL_S3"
     echo "      U. $LBL_U"
     echo "      0. ${LBL_BACK_ITEM}"
     echo
@@ -6062,6 +6212,7 @@ menu_service() {
     case "$schoice" in
       1) service_upx_compress || true ;;
       2) service_mirror_menu || true ;;
+      3) service_opkg_repair || true ;;
       U|u) opkg_upgrade_all || true ;;
       0|"") return 0 ;;
       *) warn "Неверный выбор." ;;
@@ -6201,9 +6352,56 @@ upd_cache_fresh() {
   [ $((now - checked)) -lt "$UPD_TTL" ]
 }
 
+# PID-файл + завершение чужих/осиротевших экземпляров меню.
+# После обрыва SSH старый процесс часто крутит read -t вхолостую (100% CPU).
+MENU_PIDFILE="/tmp/nfqws-menu.pid"
+
+_menu_is_menu_pid() {
+  local p="$1" c
+  [ -n "$p" ] && [ -r "/proc/$p/cmdline" ] || return 1
+  c=$(tr -d '\0' < "/proc/$p/cmdline" 2>/dev/null)
+  case "$c" in
+    *nfqws-menu.sh*|*'/bin/menu'*|*'/usr/bin/menu'*|*'/opt/bin/menu'*|*/nfqws-menu*) return 0 ;;
+  esac
+  return 1
+}
+
+_menu_kill_pid() {
+  local p="$1"
+  [ -n "$p" ] && [ "$p" != "$$" ] || return 0
+  kill -TERM "$p" 2>/dev/null || true
+  sleep 1
+  kill -KILL "$p" 2>/dev/null || true
+}
+
+# Убить другие копии меню (в т.ч. после обрыва сессии).
+ensure_single_instance() {
+  local old p
+  old=$(cat "$MENU_PIDFILE" 2>/dev/null | tr -d ' \t\r\n')
+  if [ -n "$old" ] && [ "$old" != "$$" ] && kill -0 "$old" 2>/dev/null; then
+    if _menu_is_menu_pid "$old"; then
+      warn "Предыдущее меню (PID $old) — завершаем..."
+      _menu_kill_pid "$old"
+    fi
+  fi
+  # Доп. проход: любые nfqws-menu кроме нас
+  for p in /proc/[0-9]*; do
+    [ -r "$p/cmdline" ] || continue
+    p=${p#/proc/}
+    [ "$p" = "$$" ] && continue
+    _menu_is_menu_pid "$p" || continue
+    warn "Лишний процесс меню (PID $p) — завершаем..."
+    _menu_kill_pid "$p"
+  done
+  mkdir -p "$(dirname "$MENU_PIDFILE")" 2>/dev/null || true
+  printf '%s\n' "$$" > "$MENU_PIDFILE"
+  return 0
+}
+
 upd_cleanup() {
   [ -n "${UPD_JOB:-}" ] && kill "$UPD_JOB" 2>/dev/null
   rm -f "${UPD_CACHE}.tmp.$$" 2>/dev/null
+  rm -f "${MENU_PIDFILE:-/tmp/nfqws-menu.pid}" 2>/dev/null
   return 0
 }
 
@@ -6213,6 +6411,9 @@ upd_start() {
   MENU_PID=$$
   trap 'UPD_REDRAW=1' USR1
   trap 'upd_cleanup' EXIT
+  # обрыв SSH / kill — сразу выходим, не оставляем зомби с 100% CPU
+  trap 'upd_cleanup; exit 129' HUP
+  trap 'upd_cleanup; exit 143' TERM
   # NFQWS_MENU_UPDATE_BG=0 — без фоновой проверки (без второго кадра)
   case "${NFQWS_MENU_UPDATE_BG:-1}" in
     0|false|FALSE|no|NO) return 0 ;;
@@ -6309,9 +6510,18 @@ read_choice() {
         READ_RC=1
         return 1
       fi
+      # сессия умерла (SSH drop) — не крутить CPU
+      if [ ! -t 0 ]; then
+        READ_RC=2
+        return 1
+      fi
       # timeout 1 с: 0 = строка введена; иначе таймаут/сигнал → снова цикл
       if read -r -t 1 "$_var" 2>/dev/null; then
         return 0
+      fi
+      if [ ! -t 0 ]; then
+        READ_RC=2
+        return 1
       fi
       if [ "$UPD_REDRAW" = 1 ]; then
         UPD_REDRAW=0
@@ -6337,6 +6547,7 @@ read_choice() {
 # Главное меню
 # ---------------------------------------------------------------------------
 main_menu() {
+  ensure_single_instance
   upd_start
   local os_tag="OpenWrt"
   [ "$ROUTER_OS" = "generic" ] && os_tag="Linux"
