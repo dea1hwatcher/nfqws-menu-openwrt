@@ -339,7 +339,7 @@ confirm_yes() {
   # Ответ обнуляем перед чтением: если read не получит строки (конец ввода),
   # прежнее значение не должно означать «да» — иначе долгий подбор запускается
   # сам, а на экране при этом «[Y/n]: n».
-  ans=''
+  local ans=''
   read_menu ans || return 1
   case "$ans" in n|N|н|Н) return 1 ;; esac
   return 0
@@ -347,6 +347,7 @@ confirm_yes() {
 
 confirm_no() {
   ask "${1:-Continue?} [y/N]: "
+  local ans=''
   read_menu ans
   case "$ans" in y|Y|д|Д) return 0 ;; esac
   return 1
@@ -752,10 +753,12 @@ blob_expected_sha256() {
 _run_remote_sh_restore_traps() {
   if [ -n "${MENU_PID:-}" ]; then
     trap 'upd_cleanup' EXIT
+    trap 'upd_cleanup; exit 129' HUP
+    trap 'upd_cleanup; exit 130' INT
+    trap 'upd_cleanup; exit 143' TERM
   else
-    trap - EXIT
+    trap - EXIT HUP INT TERM
   fi
-  trap - INT TERM
 }
 
 run_remote_sh() {
@@ -888,7 +891,7 @@ ensure_openwrt_feed_key() {
     info "Ключ фида $feed установлен: $pem"
     return 0
   fi
-  local key_file="/tmp/nfqws-feed.pub"
+  local key_file="/tmp/nfqws-feed.pub" rc=0
   if ! command -v opkg-key >/dev/null 2>&1; then
     error "opkg-key не найден — установка подписанных пакетов OpenWrt невозможна."
     return 1
@@ -897,7 +900,12 @@ ensure_openwrt_feed_key() {
     error "Не удалось скачать GPG-ключ фида $feed."
     return 1
   fi
-  opkg-key add "$key_file" >/dev/null 2>&1 || { error "opkg-key add не прошёл."; return 1; }
+  opkg-key add "$key_file" >/dev/null 2>&1 || rc=$?
+  rm -f "$key_file"
+  if [ "$rc" -ne 0 ]; then
+    error "opkg-key add не прошёл."
+    return 1
+  fi
   info "GPG-ключ фида $feed добавлен."
   return 0
 }
@@ -1976,7 +1984,7 @@ set_isp_interface_line() {
 
 # $1=conf  $2=опционально: ISP из конфига ДО смены стратегии (эталон для сравнения)
 fix_isp_interface() {
-  local conf="$1" preferred="${2:-}" detected current ipv6_val current_ipv6 chosen iface_for_v6 conf_isp
+  local conf="$1" preferred="${2:-}" detected current ipv6_val current_ipv6 chosen iface_for_v6 conf_isp ans
   detected=$(detect_isp_interface)
   if [ -z "$detected" ]; then
     warn "Не удалось определить интерфейс провайдера (route/ip route)."
@@ -2299,6 +2307,7 @@ apply_strategy() {
     else
       error "Не удалось скачать $conf_path (и нет кэша offline)"
       [ "$stopped_svc" -eq 1 ] && service_restart "$init_script"
+      rm -f "$tmp"
       return 1
     fi
   else
@@ -4540,7 +4549,7 @@ tg_ws_proxy_rs_choose_variant() {
 
 tg_ws_proxy_rs_install() {
   local url="https://raw.githubusercontent.com/${TG_WS_PROXY_RS_REPO}/main/install.sh"
-  local script="/tmp/tgws-install.$$.sh" out rc upx_arg='' bin_size size_text
+  local script="/tmp/tgws-install.$$.sh" out rc upx_arg='' bin_size size_text esc
   tg_ws_proxy_rs_choose_variant || return 1
   [ "$TG_WS_PROXY_RS_UPX" = "1" ] && upx_arg='--upx'
   if ! download_sh_validated "$url" "$script" 20000; then
@@ -4590,6 +4599,7 @@ tg_ws_proxy_rs_restart() {
 # влезают в ту же строку, поэтому результат берём из [OK ] в строке.
 # На выходе «ms домен» по возрастанию, только ответившие.
 tg_ws_proxy_rs_measure_domains() {
+  local line dom ms
   "$TG_WS_PROXY_RS_BIN" --check --default-domains 2>&1 | while IFS= read -r line; do
     case "$line" in
       *"[OK ]"*) ;;
@@ -4615,8 +4625,11 @@ tg_ws_proxy_rs_probe() {
 
   out=$(
     scrub_and_source() {
-      tr -d '\r' < "$1" > "/tmp/tgws-conf.$$" && . "/tmp/tgws-conf.$$"
-      rm -f "/tmp/tgws-conf.$$"
+      tr -d '\r' < "$1" > "/tmp/tgws-conf.$$" 2>/dev/null || true
+      if [ -f "/tmp/tgws-conf.$$" ]; then
+        . "/tmp/tgws-conf.$$" 2>/dev/null || true
+        rm -f "/tmp/tgws-conf.$$"
+      fi
     }
     scrub_and_source "$TG_WS_PROXY_RS_CONF" 2>/dev/null
     scrub_and_source "$TG_WS_PROXY_RS_SECRET" 2>/dev/null
@@ -6409,6 +6422,7 @@ ensure_single_instance() {
     _menu_is_menu_pid "$p" || continue
     warn "Лишний процесс меню (PID $p) — завершаем..."
     _menu_kill_pid "$p"
+    rm -f /tmp/*."$p" /tmp/*-"$p" /tmp/*."$p".* /tmp/*-"$p".* 2>/dev/null || true
   done
   mkdir -p "$(dirname "$MENU_PIDFILE")" 2>/dev/null || true
   printf '%s\n' "$$" > "$MENU_PIDFILE"
@@ -6419,6 +6433,7 @@ upd_cleanup() {
   [ -n "${UPD_JOB:-}" ] && kill "$UPD_JOB" 2>/dev/null
   rm -f "${UPD_CACHE}.tmp.$$" 2>/dev/null
   rm -f "${MENU_PIDFILE:-/tmp/nfqws-menu.pid}" 2>/dev/null
+  rm -f /tmp/*."$$" /tmp/*-"$$" /tmp/*."$$".* /tmp/*-"$$".* 2>/dev/null || true
   return 0
 }
 
@@ -6428,8 +6443,9 @@ upd_start() {
   MENU_PID=$$
   trap 'UPD_REDRAW=1' USR1
   trap 'upd_cleanup' EXIT
-  # обрыв SSH / kill — сразу выходим, не оставляем зомби с 100% CPU
+  # обрыв SSH / kill / Ctrl+C — сразу выходим, не оставляем зомби с 100% CPU
   trap 'upd_cleanup; exit 129' HUP
+  trap 'upd_cleanup; exit 130' INT
   trap 'upd_cleanup; exit 143' TERM
   # NFQWS_MENU_UPDATE_BG=0 — без фоновой проверки (без второго кадра)
   case "${NFQWS_MENU_UPDATE_BG:-1}" in
