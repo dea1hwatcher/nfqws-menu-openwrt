@@ -1856,11 +1856,20 @@ install_web() {
   install_deps
   ensure_openwrt_feed_key "nfqws-keenetic-web" || return 1
   ensure_opkg_repo "nfqws-keenetic-web" "$(nfqws_feed_url nfqws-keenetic-web)"
-  pkg_install nfqws-keenetic-web
-  info "Веб-интерфейс установлен."
-  info "Адрес: http://$(get_lan_ip):90"
-  info "Логин/пароль — учётные данные root-пользователя роутера"
-  info "Авторизацию можно отключить: ${CONF_BASE_DIR}/nfqws_web.conf → enabled = false"
+  if pkg_install nfqws-keenetic-web; then
+    refresh_opkg_cache
+    if is_installed "nfqws-keenetic-web"; then
+      info "Веб-интерфейс установлен."
+      info "Адрес: http://$(get_lan_ip):90"
+      info "Логин/пароль — учётные данные root-пользователя роутера"
+      info "Авторизацию можно отключить: ${CONF_BASE_DIR}/nfqws_web.conf → enabled = false"
+      return 0
+    fi
+    error "pkg_install не сообщил об ошибке, но пакет nfqws-keenetic-web не установлен."
+    return 1
+  fi
+  error "Не удалось установить nfqws-keenetic-web."
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -2012,7 +2021,7 @@ fix_isp_interface() {
     chosen="$detected"
   elif [ -z "$current" ]; then
     ask "Установить ISP_INTERFACE=\"${GREEN}${detected}${NC}\"? [${GREEN}Y${NC}/${RED}n${NC}]: "
-    read -r ans
+    read -r ans || ans=n
     case "$ans" in
       n|N|н|Н) warn "ISP_INTERFACE не изменён." ;;
       *) chosen="$detected" ;;
@@ -2020,7 +2029,7 @@ fix_isp_interface() {
   else
     # current ≠ detected: Y → detected, N → оставить как в текущем конфиге
     ask "Установить ISP_INTERFACE=\"${GREEN}${detected}${NC}\"? (в текущем конфиге: \"${RED}${current}${NC}\") [${GREEN}Y${NC}/${RED}n${NC}]: "
-    read -r ans
+    read -r ans || ans=n
     case "$ans" in
       n|N|н|Н)
         chosen="$current"
@@ -5906,10 +5915,12 @@ opkg_upgrade_all() {
   fi
 }
 
+# UPX не может переписать файл запущенного процесса (ETXTBSY) — сервисы
+# останавливаются на время сжатия и запускаются обратно.
 service_upx_compress() {
   echo
   info "$LBL_S1"
-  local targets="" b
+  local targets="" b init_upx stop_svc=0 runnable="" svc_init=""
   for b in /usr/bin/nfqws /usr/bin/nfqws2 /usr/bin/tg-ws-proxy-rs /usr/bin/dpi-detector /usr/bin/telemt /usr/bin/magitrickle /usr/sbin/magitrickle /usr/bin/awg; do
     if [ -f "$b" ] && [ ! -L "$b" ] && [ -x "$b" ]; then
       targets="$targets $b"
@@ -5933,11 +5944,51 @@ service_upx_compress() {
       return 1
     fi
   fi
-  info "Сжатие (может занять несколько минут)..."
+
+  # Бинарники с init-скриптом останавливаем; dpi-detector / awg — не сервисы.
+  refresh_proc_cache
+  if confirm_no "Остановить запущенные сервисы на время сжатия?"; then
+    stop_svc=1
+  fi
   for b in $targets; do
-    info "UPX: $b"
-    upx --lzma --best "$b" 2>/dev/null || true
+    init_upx=""
+    case "$b" in
+      /usr/bin/nfqws)          init_upx=$(nfqws_init_path 1) ;;
+      /usr/bin/nfqws2)         init_upx=$(nfqws_init_path 2) ;;
+      /usr/bin/tg-ws-proxy-rs) init_upx="$TG_WS_PROXY_RS_INIT" ;;
+      /usr/bin/telemt)         init_upx="/etc/init.d/telemt" ;;
+      /usr/bin/magitrickle|/usr/sbin/magitrickle) init_upx="/etc/init.d/magitrickle" ;;
+    esac
+    if [ -n "$init_upx" ] && [ -x "$init_upx" ] && proc_running "${b##*/}"; then
+      if [ "$stop_svc" -eq 1 ]; then
+        "$init_upx" stop 2>/dev/null || true
+        svc_init="$svc_init $init_upx"
+        runnable="$runnable $b"
+      else
+        warn "  пропуск $b: сервис запущен — сжимайте после его остановки."
+      fi
+    else
+      runnable="$runnable $b"
+    fi
   done
+  [ -n "$svc_init" ] && info "Сервисы остановлены на время сжатия."
+
+  if [ -z "$runnable" ]; then
+    warn "Сжимать нечего: все кандидаты — запущенные сервисы."
+  else
+    info "Сжатие (может занять несколько минут)..."
+    for b in $runnable; do
+      info "UPX: $b"
+      upx --lzma --best "$b" || warn "UPX не сжал $b (не критично)."
+    done
+  fi
+
+  if [ -n "$svc_init" ]; then
+    info "Запуск остановленных сервисов..."
+    for init_upx in $svc_init; do
+      service_restart "$init_upx"
+    done
+  fi
   info "Готово."
 }
 
@@ -6398,8 +6449,9 @@ _menu_is_menu_pid() {
   local p="$1" c
   [ -n "$p" ] && [ -r "/proc/$p/cmdline" ] || return 1
   c=$(tr -d '\0' < "/proc/$p/cmdline" 2>/dev/null)
+  # без широкого */nfqws-menu*: под него попадали tail/vim/less на файлах меню
   case "$c" in
-    *nfqws-menu.sh*|*'/bin/menu'*|*'/usr/bin/menu'*|*'/opt/bin/menu'*|*/nfqws-menu*) return 0 ;;
+    *nfqws-menu.sh*|*'/bin/menu'*|*'/usr/bin/menu'*|*'/opt/bin/menu'*) return 0 ;;
   esac
   return 1
 }
@@ -6416,17 +6468,18 @@ _menu_kill_pid() {
 ensure_single_instance() {
   local old p
   old=$(cat "$MENU_PIDFILE" 2>/dev/null | tr -d ' \t\r\n')
-  if [ -n "$old" ] && [ "$old" != "$$" ] && kill -0 "$old" 2>/dev/null; then
+  if [ -n "$old" ] && [ "$old" != "$$" ] && [ "$old" != "$PPID" ] && kill -0 "$old" 2>/dev/null; then
     if _menu_is_menu_pid "$old"; then
       warn "Предыдущее меню (PID $old) — завершаем..."
       _menu_kill_pid "$old"
     fi
   fi
-  # Доп. проход: любые nfqws-menu кроме нас
+  # Доп. проход: любые nfqws-menu кроме нас (и нашего родителя)
   for p in /proc/[0-9]*; do
     [ -r "$p/cmdline" ] || continue
     p=${p#/proc/}
     [ "$p" = "$$" ] && continue
+    [ "$p" = "$PPID" ] && continue
     _menu_is_menu_pid "$p" || continue
     warn "Лишний процесс меню (PID $p) — завершаем..."
     _menu_kill_pid "$p"
