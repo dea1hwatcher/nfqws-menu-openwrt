@@ -5628,39 +5628,33 @@ menu_change_fake_blob() {
     sed -E "s|--blob=${sel_name}:[^[:space:]\"]*|--blob=${sel_name}:@${new_path}|g" "$conf" > "$tmp"
   else
     warn "В конфиге нет --blob=${sel_name}:... — добавляю в NFQWS_BASE_ARGS."
-    local inserted=0
-    : > "$tmp"
-    while IFS= read -r line || [ -n "$line" ]; do
-      if [ "$inserted" -eq 0 ]; then
-        case "$line" in
-          NFQWS_BASE_ARGS=\"*)
-            printf '%s\n' "$line" >> "$tmp"
-            case "$line" in
-              *\")
-                # однострочный — добавим после через sed-подобную вставку на следующей итерации сложно;
-                # вставим отдельную строку с дописыванием после открытия, если multi-line
-                ;;
-              *)
-                printf '                 --blob=%s:@%s\n' "$sel_name" "$new_path" >> "$tmp"
-                inserted=1
-                ;;
-            esac
-            continue
-            ;;
-          NFQWS_BASE_ARGS=\")
-            printf '%s\n' "$line" >> "$tmp"
-            printf '                 --blob=%s:@%s\n' "$sel_name" "$new_path" >> "$tmp"
-            inserted=1
-            continue
-            ;;
-        esac
-      fi
-      printf '%s\n' "$line" >> "$tmp"
-    done < "$conf"
-    if [ "$inserted" -eq 0 ]; then
-      printf '\n# added by nfqws-menu\nNFQWS_BASE_ARGS="${NFQWS_BASE_ARGS} --blob=%s:@%s"\n' \
-        "$sel_name" "$new_path" >> "$tmp"
-    fi
+    # awk вместо ручного цикла: однострочный NFQWS_BASE_ARGS="…" — внутрь кавычек,
+    # открытие многострочного — аргументом строкой ниже, переменной нет —
+    # переопределение в конце (раскрывается при source конфига).
+    awk -v blob="--blob=${sel_name}:@${new_path}" '
+      BEGIN { done = 0 }
+      !done && /^NFQWS_BASE_ARGS="/ {
+        line = $0
+        sub(/[ \t\r]+$/, "", line)
+        if (line ~ /"$/ && line != "NFQWS_BASE_ARGS=\"") {
+          sub(/"$/, "", line)
+          print line " " blob "\""
+        } else {
+          print line
+          print "                 " blob
+        }
+        done = 1
+        next
+      }
+      { print }
+      END {
+        if (!done) {
+          print ""
+          print "# added by nfqws-menu"
+          print "NFQWS_BASE_ARGS=\"${NFQWS_BASE_ARGS} " blob "\""
+        }
+      }
+    ' "$conf" > "$tmp"
   fi
 
   if [ ! -s "$tmp" ]; then
