@@ -228,9 +228,7 @@ ui_apply_lang() {
       LBL_LANG="Language: RU"
       LBL_INVALID="Неверный пункт меню"
       LBL_BACK_ITEM="Назад"
-      LBL_CANCEL="Отмена"
       LBL_YOUR_CHOICE="Ваш выбор"
-      LBL_CHOICE="Выбор"
       LBL_INSTALL_TITLE="Установка NFQWS / NFQWS2"
       LBL_INSTALL_DIRECT="Прямая установка .ipk / .apk (обход фида)"
       LBL_IPSET_WARN1="⚠ ОСТОРОЖНО"
@@ -273,9 +271,7 @@ ui_apply_lang() {
       LBL_LANG="Language: EN"
       LBL_INVALID="Invalid menu option"
       LBL_BACK_ITEM="Back"
-      LBL_CANCEL="Cancel"
       LBL_YOUR_CHOICE="Your choice"
-      LBL_CHOICE="Choice"
       LBL_INSTALL_TITLE="Install NFQWS / NFQWS2"
       LBL_INSTALL_DIRECT="Direct install .ipk / .apk (bypass feeds)"
       LBL_IPSET_WARN1="⚠ CAUTION"
@@ -1239,28 +1235,17 @@ EOF
   return 1
 }
 
-# kind → «запущен?» (по процессу / порту)
+# Запущен ли amneziawg: модуль ядра загружен или поднят интерфейс awg*.
+# Вызывается только для awg (см. show_installed) — остальные kind'и проверяются напрямую.
 service_is_up() {
-  case "$1" in
-    nfqws|nfqws2|magitrickle|telemt|tg-ws-proxy|tg-ws-proxy-rs)
-      proc_running "$1"
-      ;;
-    web)
-      port_is_open 90 || proc_running lighttpd
-      ;;
-    # awg / amneziawg: модуль ядра загружен или поднят интерфейс awg*
-    awg|amneziawg)
-      [ -d /sys/module/amneziawg ] && return 0
-      if command -v awg >/dev/null 2>&1; then
-        awg show interfaces 2>/dev/null | grep -q . && return 0
-      fi
-      if command -v ip >/dev/null 2>&1; then
-        ip link show awg0 >/dev/null 2>&1 && return 0
-      fi
-      return 1
-      ;;
-    *) return 1 ;;
-  esac
+  [ -d /sys/module/amneziawg ] && return 0
+  if command -v awg >/dev/null 2>&1; then
+    awg show interfaces 2>/dev/null | grep -q . && return 0
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    ip link show awg0 >/dev/null 2>&1 && return 0
+  fi
+  return 1
 }
 
 # Один awk: OPKG + PROC + UPD → готовые строки статуса (минимум fork на MIPS)
@@ -1268,7 +1253,7 @@ service_is_up() {
 #   tg-ws-proxy-rs|dpi-detector (см. upd_check_bg).
 show_installed() {
   local out web_up=0 awg_up=0
-  local extras="" rs_ver dpi_ver kk_ver _awg_ver _tm_ver
+  local extras="" rs_ver dpi_ver _awg_ver _tm_ver
   PORT90_CACHE=""
   refresh_opkg_cache
   refresh_proc_cache
@@ -1390,10 +1375,9 @@ show_installed() {
     section == "extra" {
       if ($0 ~ /^tool\|/) {
         n = split($0, t, "|")
-        # tool|name|ver|kind
-        tname = t[2]; tver = t[3]; tkind = t[4]
+        # tool|name|ver
+        tname = t[2]; tver = t[3]
         tools[tname] = tver
-        tkind_of[tname] = tkind
         next
       }
       if ($0 ~ /^init\|/) {
@@ -1586,21 +1570,29 @@ ask_web_install() {
   fi
 }
 
+# Конфликт пакетов nfqws-keenetic ↔ nfqws2-keenetic: ставить вместе нельзя.
+# $1 = версия, которую ОСТАВЛЯЕМ (1|2) — противоположная удаляется вместе с web.
+# 0 = конфликта нет или устранён; 1 = пользователь отказался (вызов отменяет установку).
+resolve_nfqws_conflict() {
+  local keep="$1" other other_pkg
+  [ "$keep" = "1" ] && { other=2; other_pkg="nfqws2-keenetic"; } || { other=1; other_pkg="nfqws-keenetic"; }
+  is_installed "$other_pkg" || return 0
+  warn "Обнаружен ${other_pkg}. Пакеты конфликтуют — ставить вместе нельзя."
+  if ! confirm_no "Удалить ${other_pkg} (и веб-интерфейс)?"; then
+    warn "Установка отменена (${other_pkg} остаётся)."
+    return 1
+  fi
+  _stop_nfqws_hard "$other"
+  pkg_remove nfqws-keenetic-web "$other_pkg" 2>/dev/null || true
+  _stop_nfqws_hard "$other"
+  refresh_opkg_cache
+  return 0
+}
+
 install_nfqws1() {
   need_arch || return 1
   info "Установка nfqws-keenetic (версия 1)..."
-  if is_installed "nfqws2-keenetic"; then
-    warn "Обнаружен nfqws2-keenetic. Пакеты конфликтуют — nfqws-keenetic нельзя ставить вместе с nfqws2."
-    if confirm_no "Удалить nfqws2-keenetic (и веб-интерфейс) перед установкой nfqws-keenetic?"; then
-      stop_nfqws2_hard
-      pkg_remove nfqws-keenetic-web nfqws2-keenetic 2>/dev/null || true
-      stop_nfqws2_hard
-      refresh_opkg_cache
-    else
-      warn "Установка nfqws-keenetic отменена (nfqws2-keenetic остаётся)."
-      return 1
-    fi
-  fi
+  resolve_nfqws_conflict 1 || return 1
   install_deps
   ensure_openwrt_feed_key "nfqws-keenetic" || return 1
   ensure_opkg_repo "nfqws-keenetic" "$(nfqws_feed_url nfqws-keenetic)"
@@ -1622,18 +1614,7 @@ install_nfqws1() {
 install_nfqws2() {
   need_arch || return 1
   info "Установка nfqws2-keenetic (версия 2)..."
-  if is_installed "nfqws-keenetic"; then
-    warn "Обнаружен nfqws-keenetic. Пакеты конфликтуют — nfqws2 нельзя ставить вместе с nfqws-keenetic."
-    if confirm_no "Удалить nfqws-keenetic (и веб-интерфейс) перед установкой nfqws2?"; then
-      stop_nfqws1_hard
-      pkg_remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
-      stop_nfqws1_hard
-      refresh_opkg_cache
-    else
-      warn "Установка nfqws2-keenetic отменена (nfqws-keenetic остаётся)."
-      return 1
-    fi
-  fi
+  resolve_nfqws_conflict 2 || return 1
   install_deps
   ensure_openwrt_feed_key "nfqws2-keenetic" || return 1
   ensure_opkg_repo "nfqws2-keenetic" "$(nfqws_feed_url nfqws2-keenetic)"
@@ -1691,14 +1672,7 @@ install_package_direct() {
       ;;
     nfqws2-keenetic)
       repo="nfqws/nfqws2-keenetic"
-      if is_installed "nfqws-keenetic"; then
-        warn "Обнаружен nfqws-keenetic. Рекомендуется удалить его перед установкой nfqws2."
-        if confirm_no "Удалить nfqws-keenetic и веб-интерфейс?"; then
-          stop_nfqws1_hard
-          pkg_remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
-          stop_nfqws1_hard
-        fi
-      fi
+      resolve_nfqws_conflict 2 || return 1
       ;;
     nfqws-keenetic-web)
       repo="nfqws/nfqws-keenetic-web"
@@ -1747,34 +1721,10 @@ install_package_direct() {
 
   case "$pkg" in
     nfqws-keenetic)
-      if is_installed "nfqws2-keenetic"; then
-        warn "Обнаружен nfqws2-keenetic. Пакеты конфликтуют — nfqws-keenetic нельзя ставить вместе с nfqws2."
-        if confirm_no "Удалить nfqws2-keenetic (и веб-интерфейс) перед установкой nfqws-keenetic?"; then
-          stop_nfqws2_hard
-          pkg_remove nfqws-keenetic-web nfqws2-keenetic 2>/dev/null || true
-          stop_nfqws2_hard
-          refresh_opkg_cache
-        else
-          warn "Установка nfqws-keenetic отменена (nfqws2-keenetic остаётся)."
-          rm -f "$dest"
-          return 1
-        fi
-      fi
+      resolve_nfqws_conflict 1 || { rm -f "$dest"; return 1; }
       ;;
     nfqws2-keenetic)
-      if is_installed "nfqws-keenetic"; then
-        warn "Обнаружен nfqws-keenetic. Пакеты конфликтуют — nfqws2 нельзя ставить вместе с nfqws-keenetic."
-        if confirm_no "Удалить nfqws-keenetic (и веб-интерфейс) перед установкой nfqws2?"; then
-          stop_nfqws1_hard
-          pkg_remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
-          stop_nfqws1_hard
-          refresh_opkg_cache
-        else
-          warn "Установка nfqws2-keenetic отменена (nfqws-keenetic остаётся)."
-          rm -f "$dest"
-          return 1
-        fi
-      fi
+      resolve_nfqws_conflict 2 || { rm -f "$dest"; return 1; }
       ;;
   esac
 
@@ -2647,6 +2597,14 @@ _ipset_apply_and_restart() {
   esac
 }
 
+# Скачать (с очисткой) и применить ipset к текущей NFQWS_VER. 0=ok.
+_ipset_fetch_apply() {
+  local url="$1" tmp="$2"
+  _ipset_fetch_clean "$url" "$tmp" || return 1
+  _ipset_apply_and_restart "$tmp" "$_LIST_CLEAN_COUNT"
+  return 0
+}
+
 update_ipset_list() {
   need_nfqws_installed || return
 
@@ -2676,55 +2634,26 @@ update_ipset_list() {
   if [ "$choice" = "1" ]; then
     src_label="Flowseal/zapret-discord-youtube"
     info "Скачивание IPSet с $src_label ..."
-    if ! _ipset_fetch_clean "$IPSET_FLOWSEAL_URL" "$tmp"; then
-      rm -f "$tmp"
-      return 1
-    fi
-    _ipset_apply_and_restart "$tmp" "$_LIST_CLEAN_COUNT"
+    _ipset_fetch_apply "$IPSET_FLOWSEAL_URL" "$tmp" || { rm -f "$tmp"; return 1; }
     rm -f "$tmp"
     return 0
   fi
 
-  # choice=2 — стандартный ipset из репозитория пакета
+  # choice=2 — стандартный ipset из поставки пакета (URL зависит от версии)
   src_label="nfqws (поставка пакета)"
   info "Скачивание стандартного IPSet ($src_label) ..."
 
   case "$NFQWS_VER" in
     1)
-      if ! _ipset_fetch_clean "$IPSET_NFQWS1_URL" "$tmp"; then
-        rm -f "$tmp"
-        return 1
-      fi
-      _ipset_write_file "$tmp" "$(nfqws_lists_dir 1)/ipset.list" "$_LIST_CLEAN_COUNT"
-      service_restart "$(nfqws_init_path 1)"
-      info "Сервис nfqws перезапущен."
+      _ipset_fetch_apply "$IPSET_NFQWS1_URL" "$tmp" || { rm -f "$tmp"; return 1; }
       ;;
     2)
-      if ! _ipset_fetch_clean "$IPSET_NFQWS2_URL" "$tmp"; then
-        rm -f "$tmp"
-        return 1
-      fi
-      _ipset_write_file "$tmp" "$(nfqws_lists_dir 2)/ipset.list" "$_LIST_CLEAN_COUNT"
-      service_restart "$(nfqws_init_path 2)"
-      info "Сервис nfqws2 перезапущен."
+      _ipset_fetch_apply "$IPSET_NFQWS2_URL" "$tmp" || { rm -f "$tmp"; return 1; }
       ;;
     both)
       # одна из версий может не скачаться — ставим то, что скачалось
-      if _ipset_fetch_clean "$IPSET_NFQWS1_URL" "$tmp"; then
-        _ipset_write_file "$tmp" "$(nfqws_lists_dir 1)/ipset.list" "$_LIST_CLEAN_COUNT"
-      else
-        warn "nfqws1: ipset.list не обновлён."
-        rm -f "$tmp"
-      fi
-      if _ipset_fetch_clean "$IPSET_NFQWS2_URL" "$tmp"; then
-        _ipset_write_file "$tmp" "$(nfqws_lists_dir 2)/ipset.list" "$_LIST_CLEAN_COUNT"
-      else
-        warn "nfqws2: ipset.list не обновлён."
-        rm -f "$tmp"
-      fi
-      service_restart "$(nfqws_init_path 1)"
-      service_restart "$(nfqws_init_path 2)"
-      info "Сервисы перезапущены."
+      _ipset_fetch_apply "$IPSET_NFQWS1_URL" "$tmp" || warn "nfqws1: ipset.list не обновлён."
+      _ipset_fetch_apply "$IPSET_NFQWS2_URL" "$tmp" || warn "nfqws2: ipset.list не обновлён."
       ;;
   esac
   rm -f "$tmp"
@@ -2737,13 +2666,11 @@ RKN_LIST_URL="https://raw.githubusercontent.com/IndeecFOX/zapret4rocket/master/e
 # Зеркало (как в zapret4rocket/z4r) — если GitHub raw режется DPI
 RKN_LIST_MIRROR_URL="http://mizulina.shit.vc:666/IndeecFOX/zapret4rocket/master/extra_strats/TCP/RKN/List.txt"
 
-# Аргумент --hostlist=.../rkn.list для указанной версии nfqws
+# Аргумент --hostlist=.../rkn.list для указанной версии nfqws (путь — rkn_list_path)
 rkn_hostlist_arg() {
-  case "$1" in
-    1) echo "--hostlist=$(nfqws_lists_dir 1)/rkn.list" ;;
-    2) echo "--hostlist=$(nfqws_lists_dir 2)/rkn.list" ;;
-    *) return 1 ;;
-  esac
+  local p
+  p=$(rkn_list_path "$1") || return 1
+  printf '%s\n' "--hostlist=$p"
 }
 
 # Путь к rkn.list для версии
@@ -5763,23 +5690,21 @@ menu_change_fake_blob() {
 # Принудительная остановка nfqws/nfqws2 перед remove/reinstall.
 # init is_running() ломается на пустом pidfile (bad number / kill without pid),
 # из-за чего процесс остаётся висеть после opkg remove.
-stop_nfqws2_hard() {
-  local init
-  init=$(nfqws_init_path 2)
+_stop_nfqws_hard() {
+  local ver="$1" init proc pidf
+  case "$ver" in
+    1) proc="nfqws";  pidf="/var/run/nfqws.pid" ;;
+    2) proc="nfqws2"; pidf="/var/run/nfqws2.pid" ;;
+    *) return 0 ;;
+  esac
+  init=$(nfqws_init_path "$ver")
   [ -x "$init" ] && "$init" stop 2>/dev/null || true
-  killall nfqws2 2>/dev/null || true
-  killall /usr/bin/nfqws2 2>/dev/null || true
-  rm -f /var/run/nfqws2.pid
+  killall "$proc" 2>/dev/null || true
+  rm -f "$pidf"
 }
 
-stop_nfqws1_hard() {
-  local init
-  init=$(nfqws_init_path 1)
-  [ -x "$init" ] && "$init" stop 2>/dev/null || true
-  killall nfqws 2>/dev/null || true
-  killall /usr/bin/nfqws 2>/dev/null || true
-  rm -f /var/run/nfqws.pid
-}
+stop_nfqws1_hard() { _stop_nfqws_hard 1; }
+stop_nfqws2_hard() { _stop_nfqws_hard 2; }
 
 # Удаление пакета nfqws* с предварительным kill
 remove_nfqws_pkg() {
