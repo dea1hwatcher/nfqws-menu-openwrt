@@ -3441,30 +3441,31 @@ EOF
 
 owrt_pick_doh_port() {
   local n=0 ports="" id port uri pick
-  echo
-  printf '%s\n' "${BOLD}Выберите DoH-сервер:${NC}"
+  # Меню — в stderr: функция вызывается через $(...) и обязана вернуть в stdout только порт
+  echo >&2
+  printf '%s\n' "${BOLD}Выберите DoH-сервер:${NC}" >&2
   while IFS='|' read -r id port uri; do
     [ -n "$id" ] || continue
     n=$((n + 1))
-    printf ' %s) %s %s(127.0.0.1#%s)%s\n' "$n" "$uri" "$DIM" "$port" "$NC"
+    printf ' %s) %s %s(127.0.0.1#%s)%s\n' "$n" "$uri" "$DIM" "$port" "$NC" >&2
     ports="$ports $port"
   done <<EOF
 $(hdp_instances)
 EOF
   if [ "$n" -eq 0 ]; then
-    warn "Настроенных DoH-серверов нет. Сначала добавьте сервер (пункт 1)."
+    warn "Настроенных DoH-серверов нет. Сначала добавьте сервер (пункт 1)." >&2
     return 1
   fi
-  echo " 0) Отмена"
-  ask "${LBL_YOUR_CHOICE} [0]: "
+  echo " 0) Отмена" >&2
+  ask "${LBL_YOUR_CHOICE} [0]: " >&2
   read -r pick
   case "$pick" in 0|"") return 1 ;; esac
-  case "$pick" in *[!0-9]*) warn "${LBL_INVALID}"; return 1 ;; esac
+  case "$pick" in *[!0-9]*) warn "${LBL_INVALID}" >&2; return 1 ;; esac
   if [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ]; then
     printf '%s\n' $ports | awk -v n="$pick" 'NR == n'
     return 0
   fi
-  warn "${LBL_INVALID}"
+  warn "${LBL_INVALID}" >&2
   return 1
 }
 
@@ -4128,12 +4129,19 @@ update_self() {
   fi
 
   info "Установка v${remote_ver} (было v${SCRIPT_VERSION}) → $dest"
-  if ! cat "$tmp" > "$dest"; then
-    error "Не удалось записать $dest"
-    rm -f "$tmp"
+  # dest — сам работающий скрипт: пишем в .new на той же ФС и mv -f (атомарно).
+  # Прямая cat > $dest при обрыве записи (нет места) портит меню без отката.
+  if ! cat "$tmp" > "${dest}.new"; then
+    error "Не удалось записать ${dest}.new"
+    rm -f "$tmp" "${dest}.new"
     return 1
   fi
-  chmod +x "$dest" 2>/dev/null || true
+  chmod +x "${dest}.new" 2>/dev/null || true
+  if ! mv -f "${dest}.new" "$dest"; then
+    error "Не удалось заменить $dest"
+    rm -f "$tmp" "${dest}.new"
+    return 1
+  fi
   rm -f "$tmp"
   rm -f "${CACHE_DIR}/updates.cache" 2>/dev/null || true
   SCRIPT_PATH="$dest"
@@ -6210,7 +6218,7 @@ service_opkg_repair() {
   done
   if [ -z "$st" ]; then
     error "Файл базы opkg status не найден."
-    pause
+    pause_press_enter
     return 1
   fi
 
@@ -6224,7 +6232,7 @@ service_opkg_repair() {
   else
     warn "opkg всё ещё сообщает об ошибке."
   fi
-  pause
+  pause_press_enter
 }
 
 menu_service() {
@@ -6480,8 +6488,12 @@ upd_local() {
 }
 
 # Сравнение версий a > b (semver-подобно: 1.2.10 > 1.2.9). 0 = да.
+# Ревизионный суффикс (-1, -rN) отсекается у обеих сторон — согласовано с
+# awk-версией ver_gt в show_installed (иначе X.Y.Z-1 считалась новее X.Y.Z).
 ver_gt() {
   local a="$1" b="$2" ia ib n=1
+  case "$a" in *-*) a="${a%%-*}" ;; esac
+  case "$b" in *-*) b="${b%%-*}" ;; esac
   [ -n "$a" ] && [ -n "$b" ] || return 1
   [ "$a" = "$b" ] && return 1
   while [ $n -le 8 ]; do
