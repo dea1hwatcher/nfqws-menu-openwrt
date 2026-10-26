@@ -1200,7 +1200,7 @@ EOF
 }
 
 port_is_open() {
-  local port="$1" ok=1
+  local port="$1" ok=1 hex_port
   if [ "$port" = "90" ] && [ -n "$PORT90_CACHE" ]; then
     [ "$PORT90_CACHE" = "1" ]
     return $?
@@ -2424,7 +2424,7 @@ strategy_id_norm() {
 # Восстановление конфига из .bak.* (nfqws.conf.bak.YYYYMMDDHHMMSS / nfqws2.conf.bak.…)
 restore_conf_from_backup() {
   local ver="$1"
-  local conf_dest conf_dir conf_base bak_list i f num selected count=0
+  local conf_dest conf_dir conf_base bak_list i f num selected strat tag count=0
 
   conf_dest=$(nfqws_conf_path "$ver")
   conf_dir=$(dirname "$conf_dest")
@@ -2439,7 +2439,6 @@ restore_conf_from_backup() {
       echo "$f"
     done | sort -r
   )
-  count=0
   for f in $bak_list; do
     count=$((count + 1))
     # стратегия из комментария вида: #  general (ALT11).bat  ->  nfqws2
@@ -2585,15 +2584,17 @@ IPSET_NFQWS1_URL="https://raw.githubusercontent.com/nfqws/nfqws-keenetic/master/
 IPSET_NFQWS2_URL="https://raw.githubusercontent.com/nfqws/nfqws2-keenetic/master/etc/nfqws2/lists/ipset.list"
 
 # Санитизация hostlist/ipset: без #/; пустых, хвостовых пробелов и \r (CRLF).
-# $1=src $2=dest → count. 0=ok, 1=пусто/ошибка.
+# $1=src $2=dest. 0=ok, 1=пусто/ошибка. Число записей — в глобальной
+# _LIST_CLEAN_COUNT: явный контракт вместо скрытого динамического скоупа $count.
 _list_file_clean() {
   local src="$1" dest="$2"
   awk '!/^[[:space:]]*([#;]|$)/ {
     gsub(/[ \t\r]+$/, "")
     if ($0 != "") print
   }' "$src" > "$dest" 2>/dev/null || true
-  count=$(wc -l < "$dest" 2>/dev/null | tr -d ' ')
-  [ -n "$count" ] && [ "$count" != "0" ]
+  _LIST_CLEAN_COUNT=$(wc -l < "$dest" 2>/dev/null | tr -d ' ')
+  case "$_LIST_CLEAN_COUNT" in ''|*[!0-9]*) _LIST_CLEAN_COUNT=0 ;; esac
+  [ "$_LIST_CLEAN_COUNT" -gt 0 ]
 }
 
 # Скачать URL → tmp (очищенный in-place). Выставляет count. 0=ok, 1=ошибка.
@@ -2610,7 +2611,7 @@ _ipset_fetch_clean() {
     return 1
   fi
   mv -f "${tmp}.clean" "$tmp"
-  info "Записей в списке: $count"
+  info "Записей в списке: $_LIST_CLEAN_COUNT"
   return 0
 }
 
@@ -2649,7 +2650,7 @@ _ipset_apply_and_restart() {
 update_ipset_list() {
   need_nfqws_installed || return
 
-  local choice tmp count src_label
+  local choice tmp src_label
   tmp="/tmp/nfqws-ipset-$$.txt"
 
   echo
@@ -2679,7 +2680,7 @@ update_ipset_list() {
       rm -f "$tmp"
       return 1
     fi
-    _ipset_apply_and_restart "$tmp" "$count"
+    _ipset_apply_and_restart "$tmp" "$_LIST_CLEAN_COUNT"
     rm -f "$tmp"
     return 0
   fi
@@ -2694,7 +2695,7 @@ update_ipset_list() {
         rm -f "$tmp"
         return 1
       fi
-      _ipset_write_file "$tmp" "$(nfqws_lists_dir 1)/ipset.list" "$count"
+      _ipset_write_file "$tmp" "$(nfqws_lists_dir 1)/ipset.list" "$_LIST_CLEAN_COUNT"
       service_restart "$(nfqws_init_path 1)"
       info "Сервис nfqws перезапущен."
       ;;
@@ -2703,23 +2704,24 @@ update_ipset_list() {
         rm -f "$tmp"
         return 1
       fi
-      _ipset_write_file "$tmp" "$(nfqws_lists_dir 2)/ipset.list" "$count"
+      _ipset_write_file "$tmp" "$(nfqws_lists_dir 2)/ipset.list" "$_LIST_CLEAN_COUNT"
       service_restart "$(nfqws_init_path 2)"
       info "Сервис nfqws2 перезапущен."
       ;;
     both)
-      # v1
-      if ! _ipset_fetch_clean "$IPSET_NFQWS1_URL" "$tmp"; then
+      # одна из версий может не скачаться — ставим то, что скачалось
+      if _ipset_fetch_clean "$IPSET_NFQWS1_URL" "$tmp"; then
+        _ipset_write_file "$tmp" "$(nfqws_lists_dir 1)/ipset.list" "$_LIST_CLEAN_COUNT"
+      else
+        warn "nfqws1: ipset.list не обновлён."
         rm -f "$tmp"
-        return 1
       fi
-      _ipset_write_file "$tmp" "$(nfqws_lists_dir 1)/ipset.list" "$count"
-      # v2
-      if ! _ipset_fetch_clean "$IPSET_NFQWS2_URL" "$tmp"; then
+      if _ipset_fetch_clean "$IPSET_NFQWS2_URL" "$tmp"; then
+        _ipset_write_file "$tmp" "$(nfqws_lists_dir 2)/ipset.list" "$_LIST_CLEAN_COUNT"
+      else
+        warn "nfqws2: ipset.list не обновлён."
         rm -f "$tmp"
-        return 1
       fi
-      _ipset_write_file "$tmp" "$(nfqws_lists_dir 2)/ipset.list" "$count"
       service_restart "$(nfqws_init_path 1)"
       service_restart "$(nfqws_init_path 2)"
       info "Сервисы перезапущены."
@@ -2871,7 +2873,7 @@ update_rkn_list() {
   need_nfqws_installed || return
   pick_nfqws_ver 1 || return
 
-  local tmp="/tmp/nfqws-rkn-$$.txt" count=""
+  local tmp="/tmp/nfqws-rkn-$$.txt"
   local skip_download=0
 
   # Проверяем существующие файлы (любая из выбранных версий)
@@ -2945,15 +2947,15 @@ update_rkn_list() {
       return 1
     fi
     mv -f "${tmp}.clean" "$tmp"
-    info "Записей в списке: $count"
+    info "Записей в списке: $_LIST_CLEAN_COUNT"
   fi
 
   case "$NFQWS_VER" in
-    1)   _rkn_apply_for_ver 1 "$tmp" "$count" "$skip_download" ;;
-    2)   _rkn_apply_for_ver 2 "$tmp" "$count" "$skip_download" ;;
+    1)   _rkn_apply_for_ver 1 "$tmp" "$_LIST_CLEAN_COUNT" "$skip_download" ;;
+    2)   _rkn_apply_for_ver 2 "$tmp" "$_LIST_CLEAN_COUNT" "$skip_download" ;;
     both)
-      _rkn_apply_for_ver 1 "$tmp" "$count" "$skip_download"
-      _rkn_apply_for_ver 2 "$tmp" "$count" "$skip_download"
+      _rkn_apply_for_ver 1 "$tmp" "$_LIST_CLEAN_COUNT" "$skip_download"
+      _rkn_apply_for_ver 2 "$tmp" "$_LIST_CLEAN_COUNT" "$skip_download"
       ;;
   esac
 
@@ -3423,8 +3425,15 @@ owrt_doh_add() {
   host=${uri#https://}
   host=${host%%/*}
   host=${host%%:*}
+  # bootstrap — только точный IPv4: цифры/точки и ровно 3 точки,
+  # иначе хост вида 1.2.3.4.example.com попал бы в bootstrap целиком
   case "$host" in
-    [0-9]*.[0-9]*.[0-9]*.[0-9]*) bootstrap="$host" ;;
+    *[!0-9.]*) ;;
+    *)
+      if [ "$(printf '%s' "$host" | tr -cd '.' | wc -c)" = "3" ]; then
+        bootstrap="$host"
+      fi
+      ;;
   esac
 
   if ! hdp_ensure; then return 1; fi
@@ -3479,7 +3488,7 @@ EOF
 }
 
 _fetch_geohide_domains() {
-  local cache_dir="/etc/nfqws-menu"
+  local cache_dir="$CACHE_DIR"
   if [ -f "./domains_geohide" ]; then
     awk '!/^[[:space:]]*(#|$)/ { print $1 }' "./domains_geohide"
     return 0
@@ -3864,8 +3873,10 @@ EOF
 # Удалить блок записей nfqws-menu из /etc/hosts
 host_entries_delete_all() {
   if [ -f /etc/hosts ] && grep -qF "$HOSTS_MARK_BEGIN" /etc/hosts 2>/dev/null; then
-    hosts_strip_block /etc/hosts > /etc/hosts.nfqws.tmp
-    cat /etc/hosts.nfqws.tmp > /etc/hosts && rm -f /etc/hosts.nfqws.tmp
+    # запись в .new + mv: обрыв не оставит /etc/hosts обрезанным
+    hosts_strip_block /etc/hosts > /etc/hosts.nfqws.new && \
+      mv -f /etc/hosts.nfqws.new /etc/hosts
+    rm -f /etc/hosts.nfqws.new
     reload_dns_service
     info "Блок nfqws-menu удалён из /etc/hosts."
   else
@@ -3901,8 +3912,9 @@ host_entries_apply() {
   } > "$block"
   n_dom=$(wc -l < "${block}.body" 2>/dev/null | tr -d ' ')
   hosts_strip_block /etc/hosts > "${block}.base"
-  cat "${block}.base" "$block" > /etc/hosts
-  rm -f "$block" "${block}.base" "${block}.body" "$merged"
+  cat "${block}.base" "$block" > /etc/hosts.nfqws.new && \
+    mv -f /etc/hosts.nfqws.new /etc/hosts
+  rm -f /etc/hosts.nfqws.new "$block" "${block}.base" "${block}.body" "$merged"
   info "Записано: /etc/hosts (записей в блоке: ${n_dom:-0})."
   reload_dns_service
 }
@@ -6244,8 +6256,10 @@ _opkg_repair_status() {
   fixed="/tmp/opkg-status-$$.fixed"
   tr -d '\000' < "$st" > "$tmp" 2>/dev/null || cp "$st" "$tmp"
   awk 'BEGIN{RS="";ORS="\n\n"} /^Package: / && /Status: / {print}' "$tmp" > "$fixed"
-  n0=$(grep -c '^Package:' "$st" 2>/dev/null || echo 0)
-  n1=$(grep -c '^Package:' "$fixed" 2>/dev/null || echo 0)
+  n0=$(grep -c '^Package:' "$st" 2>/dev/null)
+  n1=$(grep -c '^Package:' "$fixed" 2>/dev/null)
+  case "$n0" in ''|*[!0-9]*) n0=0 ;; esac
+  case "$n1" in ''|*[!0-9]*) n1=0 ;; esac
   if [ ! -s "$fixed" ]; then
     error "  Не удалось восстановить базу $st"
     rm -f "$tmp" "$fixed"
@@ -6526,6 +6540,7 @@ upd_remote() {
 
 # Установленная версия для ключа.
 upd_local() {
+  local _v
   case "$1" in
     menu)           printf '%s' "$SCRIPT_VERSION" ;;
     tg-ws-proxy-rs) tg_ws_proxy_rs_version 2>/dev/null ;;
@@ -6704,6 +6719,7 @@ main_menu() {
       10) menu_dpi_detector || true ;;
       11) menu_awg_openwrt || true ;;
       12) menu_magitrickle || true ;;
+      # 15/16 — алиасы старой нумерации (совместимость)
       13|15) menu_telemt || true ;;
       14|16) menu_tg_ws_proxy_rs || true ;;
       S|s) menu_service || true ;;
