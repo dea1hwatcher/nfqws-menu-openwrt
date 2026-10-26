@@ -11,7 +11,7 @@
 
 set -e
 
-SCRIPT_VERSION="0.1.7"
+SCRIPT_VERSION="0.1.8"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
