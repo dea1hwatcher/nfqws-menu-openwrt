@@ -10,8 +10,9 @@
 #   MAJOR (+1.0.0) — критические изменения
 
 set -e
+trap '' USR1 2>/dev/null || true
 
-SCRIPT_VERSION="0.1.8"
+SCRIPT_VERSION="0.1.9"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
@@ -701,7 +702,7 @@ file_sha256() {
 
 # Скачать/обновить кэш SHA256SUMS (TTL ~1ч). Не фатально при ошибке сети.
 ensure_blobs_sha256sums() {
-  local ttl=3600 now age
+  local ttl=3600 now age tmp
   now=$(date +%s 2>/dev/null || echo 0)
   if [ -f "$BLOBS_SHA256SUMS_CACHE" ] && [ -s "$BLOBS_SHA256SUMS_CACHE" ]; then
     # mtime кэша
@@ -718,9 +719,11 @@ ensure_blobs_sha256sums() {
       return 0
     fi
   fi
-  if download_file "$BLOBS_SHA256SUMS_URL" "$BLOBS_SHA256SUMS_CACHE"; then
+  tmp="${BLOBS_SHA256SUMS_CACHE}.tmp.$$"
+  if download_file "$BLOBS_SHA256SUMS_URL" "$tmp" && [ -s "$tmp" ] && mv -f "$tmp" "$BLOBS_SHA256SUMS_CACHE"; then
     return 0
   fi
+  rm -f "$tmp"
   # старый кэш лучше, чем ничего
   [ -s "$BLOBS_SHA256SUMS_CACHE" ] && return 0
   return 1
@@ -1833,7 +1836,7 @@ REPO_SHA256SUMS_URL="${RAW_BASE}/SHA256SUMS"
 REPO_SHA256SUMS_CACHE="/tmp/nfqws-repo-SHA256SUMS"
 
 ensure_repo_sha256sums() {
-  local ttl=3600 now age
+  local ttl=3600 now age tmp
   now=$(date +%s 2>/dev/null || echo 0)
   if [ -f "$REPO_SHA256SUMS_CACHE" ] && [ -s "$REPO_SHA256SUMS_CACHE" ]; then
     if age=$(stat -c %Y "$REPO_SHA256SUMS_CACHE" 2>/dev/null); then
@@ -1844,9 +1847,11 @@ ensure_repo_sha256sums() {
       return 0
     fi
   fi
-  if download_file "$REPO_SHA256SUMS_URL" "$REPO_SHA256SUMS_CACHE"; then
+  tmp="${REPO_SHA256SUMS_CACHE}.tmp.$$"
+  if download_file "$REPO_SHA256SUMS_URL" "$tmp" && [ -s "$tmp" ] && mv -f "$tmp" "$REPO_SHA256SUMS_CACHE"; then
     return 0
   fi
+  rm -f "$tmp"
   [ -s "$REPO_SHA256SUMS_CACHE" ] && return 0
   return 1
 }
@@ -1895,9 +1900,37 @@ list_strategies() {
 
 detect_isp_interface() {
   local iface=""
-  if command -v ip >/dev/null 2>&1; then
-    iface=$(ip route 2>/dev/null | awk '/^default/ {for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+  # 1) OpenWrt ubus / uci (приоритет реальному WAN-интерфейсу роутера)
+  if command -v ubus >/dev/null 2>&1; then
+    iface=$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null || true)
+    [ -z "$iface" ] && iface=$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.device' 2>/dev/null || true)
+    [ -z "$iface" ] && iface=$(ubus call network.interface.wan6 status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null || true)
   fi
+  if [ -z "$iface" ] && command -v uci >/dev/null 2>&1; then
+    iface=$(uci -q get network.wan.device || uci -q get network.wan.ifname || uci -q get network.wan6.device || uci -q get network.wan6.ifname || true)
+  fi
+  # 2) ip route (с фильтрацией туннельных интерфейсов WireGuard/OpenVPN/Tailscale)
+  if [ -z "$iface" ] && command -v ip >/dev/null 2>&1; then
+    iface=$(ip route 2>/dev/null | awk '
+      /^default/ {
+        for (i=1; i<=NF; i++) {
+          if ($i == "dev") {
+            d = $(i+1)
+            if (d !~ /^(wg|tun|tap|tailscale|docker|br-)/) {
+              print d
+              found = 1
+              exit
+            }
+            if (!fallback) fallback = d
+          }
+        }
+      }
+      END {
+        if (!found && fallback) print fallback
+      }
+    ')
+  fi
+  # 3) route -n / route fallback
   if [ -z "$iface" ]; then
     iface=$(route -n 2>/dev/null | awk '/^0\.0\.0\.0/ {print $8; exit}')
   fi
@@ -4095,6 +4128,8 @@ update_self() {
   SCRIPT_PATH="$dest"
   export SCRIPT_PATH
   ensure_menu_symlink
+  trap - USR1 HUP TERM EXIT 2>/dev/null || true
+  trap '' USR1 2>/dev/null || true
   info "Перезапуск меню..."
   exec sh "$dest"
 }
@@ -5444,11 +5479,15 @@ parse_fake_blobs() {
 list_repo_blobs() {
   # 1) strategies/blobs/SHA256SUMS  2) GitHub API  3) встроенный fallback
   local cache="/tmp/nfqws-repo-blobs.list"
-  local now age=999999 list
+  local now mtime age=999999 list
 
   now=$(date +%s 2>/dev/null || echo 0)
-  if [ -f "$cache" ]; then
-    age=$((now - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
+  if [ -f "$cache" ] && [ -s "$cache" ]; then
+    if mtime=$(stat -c %Y "$cache" 2>/dev/null) || mtime=$(date -r "$cache" +%s 2>/dev/null); then
+      age=$((now - mtime))
+    else
+      age=0
+    fi
   fi
   if [ -f "$cache" ] && [ "$age" -lt 3600 ] && [ -s "$cache" ]; then
     cat "$cache"
@@ -5500,7 +5539,7 @@ menu_change_fake_blob() {
   need_nfqws_installed || return 0
   pick_nfqws_ver 0 || { warn "Отменено."; return 0; }
 
-  local conf blobs_dir map_file list_file
+  local conf blobs_dir map_file list_file cand_file
   conf=$(nfqws_conf_path "$NFQWS_VER")
   blobs_dir=$(nfqws_blobs_dir "$NFQWS_VER")
   if [ ! -f "$conf" ]; then
@@ -5510,12 +5549,16 @@ menu_change_fake_blob() {
 
   map_file="/tmp/nfqws-fakeblob-map-$$"
   list_file="/tmp/nfqws-fakeblob-list-$$"
+  cand_file="/tmp/nfqws-blob-cands-$$"
+  _fb_cleanup() {
+    rm -f "$map_file" "$list_file" "$cand_file" /tmp/nfqws-local-blobs-$$ /tmp/nfqws-repo-blobs-$$
+  }
 
   echo
   info "Анализ конфига: $conf"
   if ! parse_fake_blobs "$conf" "$map_file" "$list_file"; then
     warn "В конфиге не найдено использований fake:blob=NAME: (кроме hex)."
-    rm -f "$map_file" "$list_file"
+    _fb_cleanup
     return 0
   fi
 
@@ -5535,11 +5578,11 @@ menu_change_fake_blob() {
   ask "Какой из найденных fake:blob требуется заменить? (номер / Enter = отмена): "
   read -r choice
   case "$choice" in
-    ''|0|q|Q|н|Н) info "Отменено."; rm -f "$map_file" "$list_file"; return 0 ;;
+    ''|0|q|Q|н|Н) info "Отменено."; _fb_cleanup; return 0 ;;
   esac
   if ! echo "$choice" | grep -qE '^[0-9]+$'; then
     warn "Нужен номер."
-    rm -f "$map_file" "$list_file"
+    _fb_cleanup
     return 0
   fi
 
@@ -5547,7 +5590,7 @@ menu_change_fake_blob() {
   sel_line=$(grep -E "^${choice}\|" "$list_file" | head -1)
   if [ -z "$sel_line" ]; then
     warn "Номер $choice не найден в списке."
-    rm -f "$map_file" "$list_file"
+    _fb_cleanup
     return 0
   fi
   sel_sec=$(echo "$sel_line" | cut -d'|' -f2)
@@ -5560,7 +5603,7 @@ menu_change_fake_blob() {
   printf '%s\n' "${BOLD}Доступные blob-файлы для замены (--blob=${sel_name}:...):${NC}"
   echo
 
-  local i=1 b cand_file="/tmp/nfqws-blob-cands-$$"
+  local i=1 b
   : > "$cand_file"
 
   if [ -d "$blobs_dir" ]; then
@@ -5591,18 +5634,18 @@ menu_change_fake_blob() {
 
   if [ "$max_cand" -lt 1 ]; then
     warn "Нет доступных .bin файлов."
-    rm -f "$map_file" "$list_file" "$cand_file" /tmp/nfqws-local-blobs-$$ /tmp/nfqws-repo-blobs-$$
+    _fb_cleanup
     return 0
   fi
   echo
   ask "${LBL_YOUR_CHOICE} [0]: "
   read -r bchoice
   case "$bchoice" in
-    ''|0|q|Q) info "Отменено."; rm -f "$map_file" "$list_file" "$cand_file" /tmp/nfqws-local-blobs-$$ /tmp/nfqws-repo-blobs-$$; return 0 ;;
+    ''|0|q|Q) info "Отменено."; _fb_cleanup; return 0 ;;
   esac
   if ! echo "$bchoice" | grep -qE '^[0-9]+$' || [ "$bchoice" -lt 1 ] || [ "$bchoice" -gt "$max_cand" ]; then
     warn "Неверный номер."
-    rm -f "$map_file" "$list_file" "$cand_file" /tmp/nfqws-local-blobs-$$ /tmp/nfqws-repo-blobs-$$
+    _fb_cleanup
     return 0
   fi
 
@@ -5615,7 +5658,7 @@ menu_change_fake_blob() {
     mkdir -p "$blobs_dir"
     if ! download_file "${RAW_BASE}/strategies/blobs/${new_bin}" "$new_path"; then
       error "Не удалось скачать $new_bin"
-      rm -f "$map_file" "$list_file" "$cand_file" /tmp/nfqws-local-blobs-$$ /tmp/nfqws-repo-blobs-$$
+      _fb_cleanup
       return 1
     fi
     info "Скачано."
@@ -5659,7 +5702,8 @@ menu_change_fake_blob() {
 
   if [ ! -s "$tmp" ]; then
     error "Ошибка формирования нового конфига."
-    rm -f "$tmp" "$map_file" "$list_file" "$cand_file" /tmp/nfqws-local-blobs-$$ /tmp/nfqws-repo-blobs-$$
+    rm -f "$tmp"
+    _fb_cleanup
     return 1
   fi
 
@@ -5675,7 +5719,7 @@ menu_change_fake_blob() {
     info "Перезапуск пропущен — примените вручную."
   fi
 
-  rm -f "$map_file" "$list_file" "$cand_file" /tmp/nfqws-local-blobs-$$ /tmp/nfqws-repo-blobs-$$
+  _fb_cleanup
   return 0
 }
 

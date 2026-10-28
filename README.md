@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.8**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.9**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -376,6 +376,21 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ---
 
 ## Changelog
+
+### 0.1.9
+
+- **Корректное определение WAN-интерфейса провайдера (`detect_isp_interface`)**:
+  - Приоритетный запрос нативного статуса сети OpenWrt через `ubus` (`network.interface.wan` / `wan6` -> `.l3_device` / `.device`) и UCI (`network.wan.device` / `network.wan.ifname`).
+  - Фильтрация виртуальных туннелей (`wg*`, `tun*`, `tap*`, `tailscale*`, `docker*`, `br-*`) в `ip route`, предотвращающая ошибочный перехват VPN-интерфейса вместо физического WAN при активном WireGuard / OpenVPN.
+- **Сохранение кэша `SHA256SUMS` при сетевых сбоях**:
+  - `ensure_blobs_sha256sums` и `ensure_repo_sha256sums` скачивают данные во временный файл (`.tmp.$$`) и атомарно заменяют кэш только при успешной непустой загрузке. Локальный кэш больше не уничтожается при временной недоступности GitHub.
+- **Защита от гонки сигналов `SIGUSR1`**:
+  - Ранняя установка `trap '' USR1` при старте скрипта и сброс ловушек перед `exec sh "$dest"` при самообновлении — предотвращает аварийное завершение BusyBox `ash` сигналом 138 (`User defined signal 1`).
+- **Синхронизация списков с upstream (v0.10.21)**:
+  - Актуализированы CIDR/IPSet списки (`ipset_as.list`, `as.conf`, `google.list`, списки хостингов Contabo, Creanova, FranTech, Iomart, Melbicom).
+- **Оптимизация и устранение дублирования**:
+  - Добавлен BusyBox fallback (`date -r`) для проверки mtime в `list_repo_blobs`.
+  - Дедуплицирована очистка временных файлов в `menu_change_fake_blob` через локальный хелпер `_fb_cleanup`.
 
 ### 0.1.8
 
