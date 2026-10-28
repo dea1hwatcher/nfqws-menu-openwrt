@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.9**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.10**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -376,6 +376,14 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ---
 
 ## Changelog
+
+### 0.1.10
+
+- **Исправление критического сбоя запуска команды `menu` на OpenWrt (BusyBox ash)**:
+  - Устранена ложная детекция вызова через subshell `if (return 0 2>/dev/null); then return 0; fi`. В BusyBox ash subshell `(return 0)` всегда завершался с кодом 0, из-за чего скрипт при прямом вызове `menu` в SSH мгновенно завершался по `return 0` без запуска `main_menu`.
+  - Защита библиотеки ограничена переменной `NFQWS_MENU_LIB_ONLY=1` и строгой проверкой `${BASH_SOURCE[0]} != $0` (только для тестовых сценариев bash), что исключает случайный выход в ash.
+  - Добавлена защита `trap 'UPD_REDRAW=1' USR1 2>/dev/null || true` в `upd_start` от падения под `set -e` на окружениях без USR1.
+  - Улучшено разрешение `SCRIPT_PATH` через `command -v "$0"` и `readlink -f` при запуске по короткому имени `menu`, а также предотвращено циклическое зацикливание симлинка `*/menu -> */menu`.
 
 ### 0.1.9
 

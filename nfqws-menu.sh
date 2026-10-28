@@ -12,7 +12,7 @@
 set -e
 trap '' USR1 2>/dev/null || true
 
-SCRIPT_VERSION="0.1.9"
+SCRIPT_VERSION="0.1.10"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
@@ -4077,6 +4077,7 @@ menu_script_target() {
   local t="/usr/bin/nfqws-menu.sh"
   if [ ! -f "$t" ] && [ -n "${SCRIPT_PATH:-}" ] && [ -f "$SCRIPT_PATH" ]; then
     case "$SCRIPT_PATH" in
+      */menu) ;;
       /usr/*|/etc/*|/root/*|/tmp/*) t="$SCRIPT_PATH" ;;
     esac
   fi
@@ -6479,7 +6480,7 @@ upd_cleanup() {
 # процесс. Кэш свежий — метки рисуются сразу, без единого запроса.
 upd_start() {
   MENU_PID=$$
-  trap 'UPD_REDRAW=1' USR1
+  trap 'UPD_REDRAW=1' USR1 2>/dev/null || true
   trap 'upd_cleanup' EXIT
   # обрыв SSH / kill / Ctrl+C — сразу выходим, не оставляем зомби с 100% CPU
   trap 'upd_cleanup; exit 129' HUP
@@ -6716,8 +6717,19 @@ main_menu() {
 # ---------------------------------------------------------------------------
 case "$0" in
   /*) SCRIPT_PATH="$0" ;;
-  *)  SCRIPT_PATH="$(pwd)/$0" ;;
+  *)
+    if [ -f "$0" ]; then
+      SCRIPT_PATH="$(pwd)/$0"
+    elif command -v "$0" >/dev/null 2>&1; then
+      SCRIPT_PATH=$(command -v "$0")
+    else
+      SCRIPT_PATH="$(pwd)/$0"
+    fi
+    ;;
 esac
+if [ -L "$SCRIPT_PATH" ]; then
+  SCRIPT_PATH=$(readlink -f "$SCRIPT_PATH" 2>/dev/null || readlink "$SCRIPT_PATH" 2>/dev/null || echo "$SCRIPT_PATH")
+fi
 if [ ! -f "$SCRIPT_PATH" ]; then
   for a in "$0" "$@"; do
     case "$a" in
@@ -6750,9 +6762,12 @@ ensure_menu_symlink() {
 
 ensure_menu_symlink
 
-# Не запускаем интерактивное меню, если скрипт подключён через source/.
-if (return 0 2>/dev/null); then
-  return 0
+# Не запускаем интерактивное меню, если скрипт подключён как библиотека (тесты)
+if [ "${NFQWS_MENU_LIB_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+if [ -n "${BASH_SOURCE:-}" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0 2>/dev/null || exit 0
 fi
 
 if ! command -v opkg >/dev/null 2>&1 && ! command -v apk >/dev/null 2>&1; then
