@@ -390,13 +390,13 @@ save_strategy_cache() {
 }
 
 list_strategies_from_cache() {
-  local ver="$1" d
+  local ver="$1" d f
   d="${CACHE_DIR}/strategies/nfqws${ver}"
   [ -d "$d" ] || return 1
   # только *.conf, не default (его показываем отдельно)
-  ls -1 "$d"/*.conf 2>/dev/null | while read -r f; do
+  for f in "$d"/*.conf; do
     [ -f "$f" ] && [ -s "$f" ] || continue
-    basename "$f"
+    printf '%s\n' "${f##*/}"
   done
 }
 
@@ -1488,7 +1488,7 @@ need_nfqws_installed() {
 
 pick_nfqws_ver() {
   # $1 = allow_both (1|0). Ставит NFQWS_VER = 1|2|both
-  local allow_both="${1:-0}"
+  local allow_both="${1:-0}" c
   if [ "$HAS_NFQWS1" -eq 1 ] && [ "$HAS_NFQWS2" -eq 1 ]; then
     echo
     echo "Установлены обе версии."
@@ -1663,7 +1663,7 @@ fetch_pkg_version_file() {
 
 # Прямая установка .ipk / .apk из GitHub Releases (обход блокировок фидов)
 install_package_direct() {
-  local pkg="$1" ver repo fn ext backend dest dl_ok=0
+  local pkg="$1" ver repo fn ext backend dest dl_ok=0 u url1 url2 url3
   need_arch || return 1
   backend=$(pkg_backend)
   ext="ipk"
@@ -1675,7 +1675,6 @@ install_package_direct() {
       ;;
     nfqws2-keenetic)
       repo="nfqws/nfqws2-keenetic"
-      resolve_nfqws_conflict 2 || return 1
       ;;
     nfqws-keenetic-web)
       repo="nfqws/nfqws-keenetic-web"
@@ -1705,9 +1704,9 @@ install_package_direct() {
   rm -f "$dest"
 
   info "Скачивание пакета ${fn}..."
-  local url1="https://ghproxy.net/https://github.com/${repo}/releases/download/v${ver#v}/${fn}"
-  local url2="https://github.com/${repo}/releases/download/v${ver#v}/${fn}"
-  local url3="https://nfqws.github.io/${pkg}/openwrt/${pkg}_${ver#v}_all.${ext}"
+  url1="https://ghproxy.net/https://github.com/${repo}/releases/download/v${ver#v}/${fn}"
+  url2="https://github.com/${repo}/releases/download/v${ver#v}/${fn}"
+  url3="https://nfqws.github.io/${pkg}/openwrt/${pkg}_${ver#v}_all.${ext}"
 
   for u in "$url1" "$url2" "$url3"; do
     if download_file "$u" "$dest" progress min=200000; then
@@ -1785,6 +1784,7 @@ menu_install_ipk_direct() {
 }
 
 menu_install_nfqws() {
+  local choice
   echo
   printf '%s\n' "${BOLD}── ${LBL_INSTALL_TITLE} ──${NC}"
   printf "  %s1)%s  nfqws-keenetic\n" "$GREEN" "$NC"
@@ -3013,7 +3013,7 @@ load_dot_doh_strategy() {
 inject_custom_strategy() {
   local conf="$1" strat_tmp="$2"
   local tmp="/tmp/nfqws-conf-dot-$$.tmp"
-  local found=0 in_block=0 has_content=0
+  local found=0 in_block=0 has_content=0 line body
 
   : > "$tmp"
   while IFS= read -r line || [ -n "$line" ]; do
@@ -3031,7 +3031,6 @@ inject_custom_strategy() {
           ;;
         NFQWS_ARGS_CUSTOM=\"*\")
           found=1
-          local body
           body=${line#NFQWS_ARGS_CUSTOM=\"}
           body=${body%\"}
           printf 'NFQWS_ARGS_CUSTOM="\n' >> "$tmp"
@@ -3287,7 +3286,7 @@ hdp_instances() {
 }
 
 hdp_next_port() {
-  local max=$((HDP_PORT_BASE - 1)) line port
+  local max=$((HDP_PORT_BASE - 1)) line port _id _uri
   while IFS='|' read -r _id port _uri; do
     case "$port" in *[!0-9]*) continue ;; esac
     [ "$port" -gt "$max" ] 2>/dev/null && max=$port
@@ -3734,7 +3733,7 @@ EOF
 owrt_add_doh_menu() {
   echo
   printf '%s\n' "${BOLD}Добавление DoH сервера (https-dns-proxy):${NC}"
-  local line
+  local line num label uri raw_choices choice added_any=0
   while IFS='|' read -r num label uri; do
     printf ' %2s) %s\n' "$num" "$label"
   done <<EOF
@@ -3747,7 +3746,6 @@ EOF
   read -r raw_choices
   [ -z "$raw_choices" ] || [ "$raw_choices" = "0" ] && return
 
-  local choice uri added_any=0
   for choice in $(echo "$raw_choices" | tr ',;' '  '); do
     case "$choice" in
       0) return 0 ;;
@@ -3767,6 +3765,7 @@ EOF
 }
 
 menu_dns_manage() {
+  local choice
   while true; do
     clear 2>/dev/null || true
     show_dns_servers_openwrt
@@ -3883,6 +3882,7 @@ menu_update_hosts() {
   local hosts_url="${RAW_BASE}/hosts"
   local tmp="/tmp/nfqws-hosts-$$.txt"
   local sec_file="/tmp/nfqws-hosts-sec-$$.txt"
+  local raw_choices c choices name
 
   info "Загрузка hosts..."
   if ! download_file "$hosts_url" "$tmp"; then
@@ -3981,7 +3981,7 @@ EOF
   fi
 
   # Нормализуем выбор: запятые/пробелы → список номеров
-  local choices selected_all=0
+  local selected_all=0
   choices=$(echo "$raw_choices" | tr ',;' '  ' | tr -s ' ')
 
   for c in $choices; do
@@ -4000,7 +4000,6 @@ EOF
         *[!0-9]*) continue ;;
       esac
       [ "$c" -ge 1 ] 2>/dev/null && [ "$c" -le "$n_sec" ] 2>/dev/null || continue
-      local name
       name=$(sed -n "${c}p" "$sec_file")
       [ -n "$name" ] && selected_secs="$selected_secs
 $name"
@@ -4795,7 +4794,7 @@ tg_ws_proxy_rs_variant_ok_for() {
 # лестницы с пробой каждого — список с результатами отдаётся пользователю,
 # какой путь взять, решает он.
 tg_ws_proxy_rs_tune() {
-  local domains best orig_dc orig_args
+  local domains best orig_dc orig_args row
   # Проба по ходу перебора пишет варианты в конфиг, поэтому исходные значения
   # сохраняем: «не менять» должно вернуть именно их.
   orig_dc=$(tg_ws_proxy_rs_conf_get DC_IP)
@@ -5265,7 +5264,7 @@ menu_telemt() {
 # ---------------------------------------------------------------------------
 remove_backups() {
   local dirs="$CONF_BASE_DIR/nfqws $CONF_BASE_DIR/nfqws2 $CONF_BASE_DIR/nfqws2/lists"
-  local f count=0 found=""
+  local d f count=0 found=""
 
   echo
   info "Поиск резервных копий (.bak.* , *.conf-opkg , *.list-opkg)..."
@@ -5540,7 +5539,7 @@ menu_change_fake_blob() {
   need_nfqws_installed || return 0
   pick_nfqws_ver 0 || { warn "Отменено."; return 0; }
 
-  local conf blobs_dir map_file list_file cand_file
+  local conf blobs_dir map_file list_file cand_file choice bchoice
   conf=$(nfqws_conf_path "$NFQWS_VER")
   blobs_dir=$(nfqws_blobs_dir "$NFQWS_VER")
   if [ ! -f "$conf" ]; then
@@ -5773,7 +5772,7 @@ menu_remove() {
 
   refresh_opkg_cache
 
-  local items="" p i=1 target idx
+  local items="" p i=1 target idx choice
   is_installed "nfqws-keenetic"     && items="$items nfqws-keenetic"
   is_installed "nfqws2-keenetic"    && items="$items nfqws2-keenetic"
   is_installed "nfqws-keenetic-web" && items="$items nfqws-keenetic-web"
@@ -6265,6 +6264,7 @@ service_opkg_repair() {
 }
 
 menu_service() {
+  local schoice
   while true; do
     echo
     printf '%s\n' "${BOLD}${CYAN}[::]  ${LBL_REMOVE} (S)${NC}"
@@ -6626,7 +6626,7 @@ read_choice() {
 main_menu() {
   ensure_single_instance
   upd_start
-  local os_tag="OpenWrt"
+  local os_tag="OpenWrt" choice
   [ "$ROUTER_OS" = "generic" ] && os_tag="Linux"
   while true; do
     clear 2>/dev/null || true

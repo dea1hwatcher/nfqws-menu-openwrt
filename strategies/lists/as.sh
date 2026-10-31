@@ -4,8 +4,9 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONF_FILE="${SCRIPT_DIR}/as.conf"
 LISTS_DIR="/etc/nfqws2/lists"
-#DOWNLOAD_URL="https://sw.ext.io/asw/%s?v4"
-DOWNLOAD_URL="https://asn.web2core.workers.dev/%s?v4"
+[ -d /opt/etc/nfqws2/lists ] && LISTS_DIR="/opt/etc/nfqws2/lists"
+DOWNLOAD_URL="https://sw.ext.io/asw/%s?v4"
+#DOWNLOAD_URL="https://asn.web2core.workers.dev/%s?v4"
 DOWNLOAD_URL_Z2K="https://raw.githubusercontent.com/necronicle/z2k/refs/heads/z2k-enhanced/files/lists/tcp16_nets.txt"
 
 # Check installed utils
@@ -281,6 +282,7 @@ run_download_all_as() {
     for as in $all_as_list; do
         echo " Download - $as..."
         $FETCHER "$(printf "$DOWNLOAD_URL" "$as")" 2>/dev/null >> "$temp_file"
+        echo "" >> "$temp_file"
     done
 
     echo ""
@@ -331,6 +333,7 @@ run_download_providers() {
 
             if [ -s "$temp_file" ]; then
                 grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?' "$temp_file" \
+                    | mask_16 \
                     | sort -t . -k 1,1n -k 2,2n -k 3,3n -k 4,4n -u \
                     | merge_cidrs > "$output_file"
 
