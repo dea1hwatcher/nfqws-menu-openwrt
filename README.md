@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.10**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.11**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -376,6 +376,21 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ---
 
 ## Changelog
+
+### 0.1.11
+
+- **Синхронизация с upstream (v0.1.32 / PR #29 hardcorp74)**:
+  - В стратегию `strategies/nfqws2/hardcorp74.conf` добавлен выделенный профиль desync для `googlevideo.com` (`fake:blob=0x00000000:tcp_ack=-66000:tcp_ts_up:repeats=2` + `multisplit:pos=midsld`), устраняющий деградацию скорости и блокировки YouTube.
+  - Обновлены параметры `hostfakesplit` на `host=ya.ru:repeats=4:tcp_ts=-600000:tcp_md5`.
+  - Добавлены 6 новых хостинг-списков IPSet (`ipset_as_cdn77.list`, `ipset_as_clouvider.list`, `ipset_as_digitalocean.list`, `ipset_as_hetzner.list`, `ipset_as_ovh.list`, `ipset_as_vultr.list`) и обновлены существующие CIDR-списки.
+- **Оптимизация и устранение дублирования кода**:
+  - Введён хелпер `hdp_port_by_uri` и устранён дублированный цикл поиска DoH-порта в `owrt_doh_get_or_add_port`.
+  - Устранена неиспользуемая переменная в `owrt_route_del_all`.
+  - Заменены форки `awk` для выборки элементов из списков на чистые shell-циклы в `owrt_pick_doh_port`, `owrt_unbind_menu` и `owrt_del_server_menu`.
+  - Все переменные в `owrt_del_server_menu` вынесены в шапку функции.
+- **Изоляция области видимости (Scoping)**:
+  - Устранены утечки переменных в глобальный скоуп (`local`) в 15 функциях меню и работы с DoH/DNS.
+  - В `install_package_direct` удален избыточный дублирующий вызов разрешения конфликтов.
 
 ### 0.1.10
 

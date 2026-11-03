@@ -12,7 +12,7 @@
 set -e
 trap '' USR1 2>/dev/null || true
 
-SCRIPT_VERSION="0.1.10"
+SCRIPT_VERSION="0.1.11"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
@@ -3348,28 +3348,27 @@ EOF
   fi
 }
 
-# Получить порт инстанса по URI или создать новый
-owrt_doh_get_or_add_port() {
+# Найти порт существующего инстанса https-dns-proxy по URI
+hdp_port_by_uri() {
   local target_uri="$1" id port uri
   while IFS='|' read -r id port uri; do
     [ -n "$id" ] || continue
     if [ "$uri" = "$target_uri" ]; then
-      echo "$port"
+      printf '%s\n' "$port"
       return 0
     fi
   done <<EOF
 $(hdp_instances)
 EOF
+  return 1
+}
+
+# Получить порт инстанса по URI или создать новый
+owrt_doh_get_or_add_port() {
+  local target_uri="$1" port
+  port=$(hdp_port_by_uri "$target_uri") && { printf '%s\n' "$port"; return 0; }
   if owrt_doh_add "$target_uri" >/dev/null 2>&1; then
-    while IFS='|' read -r id port uri; do
-      [ -n "$id" ] || continue
-      if [ "$uri" = "$target_uri" ]; then
-        echo "$port"
-        return 0
-      fi
-    done <<EOF
-$(hdp_instances)
-EOF
+    hdp_port_by_uri "$target_uri" && return 0
   fi
   return 1
 }
@@ -3417,7 +3416,7 @@ EOF
 }
 
 owrt_pick_doh_port() {
-  local n=0 ports="" id port uri pick
+  local n=0 ports="" id port uri pick idx p
   # Меню — в stderr: функция вызывается через $(...) и обязана вернуть в stdout только порт
   echo >&2
   printf '%s\n' "${BOLD}Выберите DoH-сервер:${NC}" >&2
@@ -3439,8 +3438,14 @@ EOF
   case "$pick" in 0|"") return 1 ;; esac
   case "$pick" in *[!0-9]*) warn "${LBL_INVALID}" >&2; return 1 ;; esac
   if [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ]; then
-    printf '%s\n' $ports | awk -v n="$pick" 'NR == n'
-    return 0
+    idx=0
+    for p in $ports; do
+      idx=$((idx + 1))
+      if [ "$idx" -eq "$pick" ]; then
+        printf '%s\n' "$p"
+        return 0
+      fi
+    done
   fi
   warn "${LBL_INVALID}" >&2
   return 1
@@ -3595,7 +3600,7 @@ owrt_bind_domain_menu() {
 }
 
 owrt_unbind_menu() {
-  local n=0 doms="" d p pick all_routes total=0 shown=0
+  local n=0 doms="" d p pick all_routes total=0 shown=0 idx cur_d
   all_routes=$(owrt_dns_routes)
   [ -z "$all_routes" ] && { info "Привязок нет."; return 0; }
   total=$(printf '%s\n' "$all_routes" | grep -c '|')
@@ -3647,8 +3652,12 @@ EOF
     *)
       case "$pick" in *[!0-9]*) warn "${LBL_INVALID}"; return 0 ;; esac
       [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] || { warn "${LBL_INVALID}"; return 0; }
-      d=$(printf '%s\n' $doms | awk -v n="$pick" 'NR == n')
-      owrt_route_del "$d"
+      idx=0
+      for cur_d in $doms; do
+        idx=$((idx + 1))
+        [ "$idx" -eq "$pick" ] && { d="$cur_d"; break; }
+      done
+      [ -n "$d" ] && owrt_route_del "$d"
       ;;
   esac
 }
@@ -3673,7 +3682,7 @@ owrt_route_del() {
 }
 
 owrt_route_del_all() {
-  local list r d removed=0
+  local list r removed=0
   list=$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null) || return 0
   for r in $list; do
     case "$r" in
@@ -3689,7 +3698,7 @@ owrt_route_del_all() {
 }
 
 owrt_del_server_menu() {
-  local n=0 ids="" id port uri pick
+  local n=0 ids="" id port uri pick port_del d p idx cur_id
   echo
   printf '%s\n' "${BOLD}Удаление DoH-сервера:${NC}"
   while IFS='|' read -r id port uri; do
@@ -3709,13 +3718,15 @@ EOF
     *[!0-9]*) warn "${LBL_INVALID}"; return 0 ;;
   esac
   [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] || { warn "${LBL_INVALID}"; return 0; }
-  id=$(printf '%s\n' $ids | awk -v n="$pick" 'NR == n')
-  local port_del
+  idx=0
+  for cur_id in $ids; do
+    idx=$((idx + 1))
+    [ "$idx" -eq "$pick" ] && { id="$cur_id"; break; }
+  done
   port_del=$(uci -q get "https-dns-proxy.$id.listen_port" 2>/dev/null)
   uci -q delete "https-dns-proxy.$id"
   uci commit https-dns-proxy
   if [ -n "$port_del" ]; then
-    local d p
     while IFS='|' read -r d p; do
       [ -n "$d" ] || continue
       [ "$p" = "$port_del" ] || continue
