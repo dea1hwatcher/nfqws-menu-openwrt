@@ -12,7 +12,7 @@
 set -e
 trap '' USR1 2>/dev/null || true
 
-SCRIPT_VERSION="0.1.11"
+SCRIPT_VERSION="0.1.12"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
@@ -749,6 +749,22 @@ blob_expected_sha256() {
 # Удалённые .sh: скачать (validated) + выполнить на полном tty
 # ---------------------------------------------------------------------------
 # $1=url  [$2=min_bytes, по умолчанию 8000; для коротких installers — 2000]
+
+# Убить зависшие sh /tmp/nfqws-remote-*.sh (обрыв SSH / Ctrl+C / дубли)
+_kill_stale_remote_sh() {
+  local _self="$$" _pid _rest
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -9 -f '/tmp/nfqws-remote-[0-9][0-9]*\.sh' 2>/dev/null || true
+  fi
+  # BusyBox ps: PID в 1-м поле; grep [n] — без себя в выводе grep
+  ps 2>/dev/null | grep -E '[n]fqws-remote-[0-9]+\.sh' | while read -r _pid _rest; do
+    case "$_pid" in ''|*[!0-9]*) continue ;; esac
+    [ "$_pid" = "$_self" ] && continue
+    kill -9 "$_pid" 2>/dev/null || true
+  done
+  rm -f /tmp/nfqws-remote-*.sh 2>/dev/null || true
+}
+
 _run_remote_sh_restore_traps() {
   if [ -n "${MENU_PID:-}" ]; then
     trap 'upd_cleanup' EXIT
@@ -761,11 +777,12 @@ _run_remote_sh_restore_traps() {
 }
 
 run_remote_sh() {
-  local url="$1" min_bytes="${2:-8000}" tmp rc=0
+  local url="$1" min_bytes="${2:-8000}" tmp rc=0 _rpid=""
   shift 2 2>/dev/null || shift $#
-  rm -f /tmp/nfqws-remote-*.sh 2>/dev/null || true
+  _kill_stale_remote_sh
   tmp="/tmp/nfqws-remote-$$.sh"
-  trap 'rm -f /tmp/nfqws-remote-$$.sh 2>/dev/null; _run_remote_sh_restore_traps' EXIT INT TERM
+  # при INT/TERM/EXIT — гарантированно убить дочерний remote, иначе остаются зомби sh
+  trap 'if [ -n "${_rpid:-}" ]; then kill -9 "$_rpid" 2>/dev/null || true; fi; rm -f /tmp/nfqws-remote-$$.sh 2>/dev/null; _run_remote_sh_restore_traps' EXIT INT TERM
 
   if ! download_sh_validated "$url" "$tmp" "$min_bytes"; then
     error "Не удалось скачать целый скрипт: $url"
@@ -775,11 +792,16 @@ run_remote_sh() {
   fi
 
   # Полный tty — иначе интерактив (awg-menu и т.п.) не поднимается
+  # фон + wait: гарантированный kill по PID при обрыве или отмене
   if [ -c /dev/tty ]; then
-    sh "$tmp" "$@" < /dev/tty > /dev/tty 2>&1 || rc=$?
+    sh "$tmp" "$@" < /dev/tty > /dev/tty 2>&1 &
+    _rpid=$!
   else
-    sh "$tmp" "$@" || rc=$?
+    sh "$tmp" "$@" &
+    _rpid=$!
   fi
+  wait "$_rpid" 2>/dev/null || rc=$?
+  _rpid=""
   rm -f "$tmp"
   _run_remote_sh_restore_traps
   drain_stdin
@@ -2078,7 +2100,7 @@ extract_list_paths() {
 # $1=label $2=conf $3=extractor_func $4=repo_subdir $5=ask_msg
 check_conf_files() {
   local label="$1" conf="$2" extractor="$3" repo_sub="$4" ask_msg="$5"
-  local paths path name missing=0 missing_list=""
+  local paths path name missing=0 missing_list="" dir_p base_p alt_p alt_name
 
   if [ ! -f "$conf" ]; then
     warn "Конфиг $conf не найден — проверка $label пропущена."
@@ -2096,9 +2118,24 @@ check_conf_files() {
     if [ -f "$path" ]; then
       info "  OK  $path"
     else
-      warn "  нет $path"
-      missing=1
-      missing_list="$missing_list $path"
+      # Проверка парного имени user-extra.list <-> user_extra.list на роутере
+      dir_p="$(dirname "$path")"
+      base_p="$(basename "$path")"
+      alt_p=""
+      case "$base_p" in
+        user-extra.list) alt_p="$dir_p/user_extra.list" ;;
+        user_extra.list) alt_p="$dir_p/user-extra.list" ;;
+      esac
+      if [ -n "$alt_p" ] && [ -f "$alt_p" ]; then
+        ln -sf "$alt_p" "$path" 2>/dev/null || cp -f "$alt_p" "$path" 2>/dev/null || true
+      fi
+      if [ -f "$path" ]; then
+        info "  OK  $path (связан с $(basename "$alt_p"))"
+      else
+        warn "  нет $path"
+        missing=1
+        missing_list="$missing_list $path"
+      fi
     fi
   done
 
@@ -2120,8 +2157,17 @@ check_conf_files() {
     if download_file "${RAW_BASE}/strategies/${repo_sub}/${name}" "$path"; then
       info "  готово"
     else
-      rm -f "$path"
-      warn "  нет в репозитории / ошибка загрузки — файл не создан ($name)"
+      alt_name=""
+      case "$name" in
+        user-extra.list) alt_name="user_extra.list" ;;
+        user_extra.list) alt_name="user-extra.list" ;;
+      esac
+      if [ -n "$alt_name" ] && download_file "${RAW_BASE}/strategies/${repo_sub}/${alt_name}" "$path"; then
+        info "  готово (fallback $alt_name)"
+      else
+        rm -f "$path"
+        warn "  нет в репозитории / ошибка загрузки — файл не создан ($name)"
+      fi
     fi
   done
 }
@@ -6530,13 +6576,27 @@ upd_local() {
   return 0
 }
 
+# Нормализация для сравнения: v1.2.3+r3 → 1.2.3; 1.2.3-1 → 1.2.3
+# (build +r3 / opkg -N не считаются «новее upstream»).
+# Zero-fork реализация на чистом ash/POSIX shell (без вызовов sed/awk).
+ver_norm() {
+  local v="$1" tail
+  case "$v" in [vV]*) v="${v#[vV]}" ;; esac
+  case "$v" in *+*) v="${v%%+*}" ;; esac
+  case "$v" in *-*)
+    tail="${v##*-}"
+    case "$tail" in ''|*[!0-9]*) ;; *) v="${v%-*}" ;; esac
+    ;;
+  esac
+  printf '%s' "$v"
+}
+
 # Сравнение версий a > b (semver-подобно: 1.2.10 > 1.2.9). 0 = да.
-# Ревизионный суффикс (-1, -rN) отсекается у обеих сторон — согласовано с
-# awk-версией ver_gt в show_installed (иначе X.Y.Z-1 считалась новее X.Y.Z).
+# Ревизионный суффикс (-1, +rN) отсекается у обеих сторон через ver_norm.
 ver_gt() {
-  local a="$1" b="$2" ia ib n=1
-  case "$a" in *-*) a="${a%%-*}" ;; esac
-  case "$b" in *-*) b="${b%%-*}" ;; esac
+  local a b ia ib n=1
+  a=$(ver_norm "$1")
+  b=$(ver_norm "$2")
   [ -n "$a" ] && [ -n "$b" ] || return 1
   [ "$a" = "$b" ] && return 1
   while [ $n -le 8 ]; do
@@ -6578,9 +6638,20 @@ upd_mark() {
   return 0
 }
 
-# Подпись к меткам — печатается, только если хоть одна метка есть.
+# Подпись к меткам — только если есть обновления; перечисляет пакеты.
 upd_legend() {
-  upd_has_pending && printf '  %s%s%s\n' "$DIM" "$LBL_UPD_LEGEND" "$NC"
+  local key rest remote has=0
+  [ -f "$UPD_CACHE" ] || return 0
+  while read -r key rest; do
+    case "$key" in ''|checked) continue ;; esac
+    [ -n "$(upd_mark "$key")" ] || continue
+    if [ "$has" -eq 0 ]; then
+      printf '  %s%s%s\n' "$DIM" "$LBL_UPD_LEGEND" "$NC"
+      has=1
+    fi
+    remote=$(upd_remote "$key")
+    printf '  %s  %s → %s%s%s\n' "$DIM" "$key" "$GREEN" "$remote" "$NC"
+  done < "$UPD_CACHE"
   return 0
 }
 
