@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.11**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.2.0**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -376,6 +376,20 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ---
 
 ## Changelog
+
+### 0.2.0
+
+- **Синхронизация с `upstream/main`**:
+  - Добавлены fake-блобы [`tls_gosuslugi.bin`](strategies/blobs/tls_gosuslugi.bin) и [`tls_sber.bin`](strategies/blobs/tls_sber.bin) (плюс запись в [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS) и fallback-списке `list_repo_blobs`).
+  - Обновлена стратегия [`strategies/nfqws2/hardcorp74.conf`](strategies/nfqws2/hardcorp74.conf) (профили `wide-youtube.l.google.com` и `googlevideo.com` с путями `/etc/nfqws2/`).
+  - Синхронизированы DoT/DoH-стратегии [`strategies/dns_filter_nfqws1`](strategies/dns_filter_nfqws1), [`strategies/dns_filter_nfqws2`](strategies/dns_filter_nfqws2) и встроенные fallback-константы `DOT_DOH_STRATEGY_NFQWS1/2` (новые домены, IP `120.53.53.53`, заголовок `#DNS`, LF).
+  - В `.gitattributes` добавлено `domains_geohide text eol=lf`.
+- **Исправления трафика, DNS, OpenWrt 25 (`apk`) и надёжности**:
+  - `detect_isp_interface` / `fix_isp_interface`: проверка активного WAN через `ubus` (`up == "true"`), исключение VPN/туннелей, безопасная запись через `awk`.
+  - `apply_dot_doh_for_ver` и `apply_strategy`: авто-регистрация `--blob=tls_clienthello` для `nfqws2`, проверка целостности скачанной стратегии до бэкапа и перезапуск остановленного сервиса при сбое.
+  - `owrt_del_server_menu`: фиксация авто-портов последующих инстансов `https-dns-proxy` и удаление осиротевших маршрутов dnsmasq.
+  - `ensure_port_in_var` и `host_entries_apply`: корректное сохранение кавычек/комментариев и безопасная склейка при отсутствии завершающего `\n` в `/etc/hosts`.
+  - Поддержка `apk` в `service_opkg_repair`, унификация `is_installed`, нормализация `-r[0-9]+` в `ver_norm`/`show_installed`, защита временных файлов в `as.sh` и trap-очистки в `nfqws-menu.sh`.
 
 ### 0.1.11
 

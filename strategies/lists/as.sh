@@ -9,6 +9,40 @@ DOWNLOAD_URL="https://sw.ext.io/asw/%s?v4"
 #DOWNLOAD_URL="https://asn.web2core.workers.dev/%s?v4"
 DOWNLOAD_URL_Z2K="https://raw.githubusercontent.com/necronicle/z2k/refs/heads/z2k-enhanced/files/lists/tcp16_nets.txt"
 
+SUB_IDX="/tmp/sub_as_index.$$.tmp"
+PROV_IDX="/tmp/prov_index.$$.tmp"
+trap 'rm -f "$SUB_IDX" "$PROV_IDX" "${LISTS_DIR}"/*.tmp.$$ "${LISTS_DIR}"/*.new.$$ 2>/dev/null' EXIT INT TERM
+
+update_conf_status() {
+    mode="$1"
+    t_prov="${2:-}"
+    t_as="${3:-}"
+    new_val="${4:-}"
+    conf_tmp="${CONF_FILE}.tmp.$$"
+    awk -v mode="$mode" -v tp="$t_prov" -v ta="$t_as" -v nv="$new_val" '
+      /^#/ || /^[[:space:]]*$/ { print; next }
+      {
+        line = $0
+        c = index(line, ":")
+        e = index(line, "=")
+        if (c > 0 && e > c) {
+          prov = substr(line, 1, c - 1)
+          asn = substr(line, c + 1, e - c - 1)
+          st = substr(line, e + 1)
+          if (mode == "all") {
+            print prov ":" asn "=" nv; next
+          } else if (mode == "prov" && prov == tp) {
+            print prov ":" asn "=" nv; next
+          } else if (mode == "one" && prov == tp && asn == ta) {
+            print prov ":" asn "=" nv; next
+          }
+        }
+        print line
+      }
+    ' "$CONF_FILE" > "$conf_tmp" && mv -f "$conf_tmp" "$CONF_FILE"
+    rm -f "$conf_tmp"
+}
+
 # Check installed utils
 if command -v wget >/dev/null 2>&1; then
     FETCHER="wget -q -T 10 --timeout=30 -O -"
@@ -119,7 +153,7 @@ menu_detail_as() {
         echo " --------------------------------------------------"
 
         i=1
-        rm -f /tmp/sub_as_index.tmp
+        rm -f "$SUB_IDX"
 
         while IFS=':=' read -r prov as_name status || [ -n "$prov" ]; do
             [ "$prov" != "$target_prov" ] && continue
@@ -128,7 +162,7 @@ menu_detail_as() {
             [ "$status" = "1" ] && mark="[*]"
 
             printf " %2d) %s %s\n" "$i" "$mark" "$as_name"
-            echo "${i}:${as_name}:${status}" >> /tmp/sub_as_index.tmp
+            echo "${i}:${as_name}:${status}" >> "$SUB_IDX"
             i=$((i + 1))
         done < "$CONF_FILE"
 
@@ -140,15 +174,15 @@ menu_detail_as() {
         read -r choice
 
         case "$choice" in
-            0) rm -f /tmp/sub_as_index.tmp; break ;;
+            0) rm -f "$SUB_IDX"; break ;;
             [aA])
-                sed -i "s/^${target_prov}:\(.*\)=0$/${target_prov}:\1=1/" "$CONF_FILE"
+                update_conf_status "prov" "$target_prov" "" "1"
                 ;;
             [dD])
-                sed -i "s/^${target_prov}:\(.*\)=1$/${target_prov}:\1=0/" "$CONF_FILE"
+                update_conf_status "prov" "$target_prov" "" "0"
                 ;;
             *)
-                target=$(grep "^${choice}:" /tmp/sub_as_index.tmp 2>/dev/null)
+                target=$(grep "^${choice}:" "$SUB_IDX" 2>/dev/null)
                 if [ -n "$target" ]; then
                     as_name=$(echo "$target" | cut -d':' -f2)
                     curr_st=$(echo "$target" | cut -d':' -f3)
@@ -159,7 +193,7 @@ menu_detail_as() {
                         new_st="1"
                     fi
 
-                    sed -i "s/^${target_prov}:${as_name}=${curr_st}$/${target_prov}:${as_name}=${new_st}/" "$CONF_FILE"
+                    update_conf_status "one" "$target_prov" "$as_name" "$new_st"
                 fi
                 ;;
         esac
@@ -173,7 +207,7 @@ menu_providers() {
         echo " --------------------------------------------------"
 
         i=1
-        rm -f /tmp/prov_index.tmp
+        rm -f "$PROV_IDX"
 
         for p in $(get_providers); do
             has_enabled=0
@@ -197,7 +231,7 @@ menu_providers() {
             fi
 
             printf " %2d) %s %s\n" "$i" "$mark" "$p"
-            echo "${i}:${p}:${st_code}" >> /tmp/prov_index.tmp
+            echo "${i}:${p}:${st_code}" >> "$PROV_IDX"
             i=$((i + 1))
         done
 
@@ -209,30 +243,30 @@ menu_providers() {
         read -r choice
 
         case "$choice" in
-            0) rm -f /tmp/prov_index.tmp; break ;;
+            0) rm -f "$PROV_IDX"; break ;;
             [aA])
-                sed -i 's/=\(0\|1\)$/=1/' "$CONF_FILE"
+                update_conf_status "all" "" "" "1"
                 ;;
             [dD])
-                sed -i 's/=\(0\|1\)$/=0/' "$CONF_FILE"
+                update_conf_status "all" "" "" "0"
                 ;;
             t*)
                 num=$(echo "$choice" | sed 's/^t//')
-                target=$(grep "^${num}:" /tmp/prov_index.tmp 2>/dev/null)
+                target=$(grep "^${num}:" "$PROV_IDX" 2>/dev/null)
                 if [ -n "$target" ]; then
                     p_name=$(echo "$target" | cut -d':' -f2)
                     st_code=$(echo "$target" | cut -d':' -f3)
 
                     if [ "$st_code" = "on" ]; then
-                        sed -i "s/^${p_name}:\(.*\)=1$/${p_name}:\1=0/" "$CONF_FILE"
+                        update_conf_status "prov" "$p_name" "" "0"
                     else
-                        sed -i "s/^${p_name}:\(.*\)=0$/${p_name}:\1=1/" "$CONF_FILE"
+                        update_conf_status "prov" "$p_name" "" "1"
                     fi
                 fi
                 ;;
             *)
 
-                target=$(grep "^${choice}:" /tmp/prov_index.tmp 2>/dev/null)
+                target=$(grep "^${choice}:" "$PROV_IDX" 2>/dev/null)
                 if [ -n "$target" ]; then
                     p_name=$(echo "$target" | cut -d':' -f2)
                     menu_detail_as "$p_name"
@@ -247,17 +281,20 @@ run_download_z2k() {
     draw_header
     mkdir -p "$LISTS_DIR"
     output_file="${LISTS_DIR}/ipset_as.list"
+    new_file="${output_file}.new.$$"
 
     echo " Download from Z2K..."
     echo " ------------------------------------------------"
 
-    $FETCHER "$DOWNLOAD_URL_Z2K" | awk '!/^#/ && !/:/ && NF>=2 {print $2}' | sort -u > "$output_file"
+    $FETCHER "$DOWNLOAD_URL_Z2K" | awk '!/^#/ && !/:/ && NF>=2 {print $2}' | sort -u > "$new_file"
 
-    if [ -s "$output_file" ]; then
+    if [ -s "$new_file" ]; then
+        mv -f "$new_file" "$output_file"
         ip_count=$(wc -l < "$output_file")
         echo "$GREEN"" [✓] Done! Full file: $(basename "$output_file") ($ip_count cidr)""$NC"
     else
-        echo "$RED"" [X] Error: Downloaded file is empty!""$NC"
+        rm -f "$new_file"
+        echo "$RED"" [X] Error: Downloaded file is empty! Old file untouched.""$NC"
     fi
 
     echo " ------------------------------------------------"
@@ -270,8 +307,9 @@ run_download_all_as() {
     draw_header
     mkdir -p "$LISTS_DIR"
     output_file="${LISTS_DIR}/ipset_as.list"
-    temp_file="${output_file}.tmp"
-    > "$temp_file"
+    temp_file="${output_file}.tmp.$$"
+    new_file="${output_file}.new.$$"
+    : > "$temp_file"
 
     echo " Download all AS..."
     echo " ------------------------------------------------"
@@ -291,13 +329,16 @@ run_download_all_as() {
         grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?' "$temp_file" \
             | mask_16 \
             | sort -t . -k 1,1n -k 2,2n -k 3,3n -k 4,4n -u \
-            | merge_cidrs > "$output_file"
+            | merge_cidrs > "$new_file"
+    fi
 
+    if [ -s "$new_file" ]; then
+        mv -f "$new_file" "$output_file"
         ip_count=$(wc -l < "$output_file")
         echo "$GREEN"" [✓] Done! Full file: $(basename "$output_file") ($ip_count cidr)""$NC"
     else
-        echo "$RED"" [X] Error: Downloaded file is empty!""$NC"
-        > "$output_file"
+        rm -f "$new_file"
+        echo "$RED"" [X] Error: Downloaded file is empty! Old file untouched.""$NC"
     fi
 
     rm -f "$temp_file"
@@ -320,10 +361,11 @@ run_download_providers() {
     else
         for prov in $active_providers; do
             output_file="${LISTS_DIR}/ipset_as_${prov}.list"
-            temp_file="${output_file}.tmp"
-            > "$temp_file"
+            temp_file="${output_file}.tmp.$$"
+            new_file="${output_file}.new.$$"
+            : > "$temp_file"
 
-            as_list=$(grep "^${prov}:" "$CONF_FILE" | grep '=1$' | cut -d':' -f2 | cut -d'=' -f1)
+            as_list=$(awk -F'[:=]' -v p="$prov" '$1 == p && $3 == "1" { print $2 }' "$CONF_FILE")
 
             echo " Download: $prov"
             for as in $as_list; do
@@ -335,13 +377,16 @@ run_download_providers() {
                 grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?' "$temp_file" \
                     | mask_16 \
                     | sort -t . -k 1,1n -k 2,2n -k 3,3n -k 4,4n -u \
-                    | merge_cidrs > "$output_file"
+                    | merge_cidrs > "$new_file"
+            fi
 
+            if [ -s "$new_file" ]; then
+                mv -f "$new_file" "$output_file"
                 ip_count=$(wc -l < "$output_file")
                 echo "$GREEN"" [✓] Done! File: $(basename "$output_file") ($ip_count cidr).""$NC"
             else
-                echo "$RED"" [X] Error: No data!""$NC"
-                rm -f "$output_file"
+                rm -f "$new_file"
+                echo "$RED"" [X] Error: No data! Old file untouched.""$NC"
             fi
 
             rm -f "$temp_file"

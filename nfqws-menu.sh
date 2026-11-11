@@ -12,7 +12,7 @@
 set -e
 trap '' USR1 2>/dev/null || true
 
-SCRIPT_VERSION="0.1.12"
+SCRIPT_VERSION="0.2.0"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
@@ -71,7 +71,7 @@ detect_os() {
   [ "$OS_CHECKED" = "1" ] && return 0
   OS_CHECKED=1
 
-  # 1) OpenWrt / ImmortalWrt / forks  2) Keenetic / Netcraze OS  3) Padavan
+  # 1) OpenWrt / ImmortalWrt / forks  2) generic Linux
   # (комментарии между ветками elif ломают парсер busybox ash — не вставлять)
   if [ -f /etc/openwrt_release ] || [ -f /etc/openwrt_version ]; then
     ROUTER_OS="openwrt"
@@ -134,11 +134,6 @@ detect_os() {
       else
         OS_HAS_NF_QUEUE=0
       fi
-
-      CONF_BASE_DIR="/etc"
-      INIT_BASE_DIR="/etc/init.d"
-      STATUS_FILE="/usr/lib/opkg/status"
-      OPKG_CONF_DIR="/etc/opkg"
       ;;
 
     generic|*)
@@ -150,10 +145,6 @@ detect_os() {
       fi
       ROUTER_TITLE="${ROUTER_OS_NAME}${ROUTER_OS_VER:+ $ROUTER_OS_VER}"
       ROUTER_MODEL=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || uname -n 2>/dev/null || echo "Linux Device")
-      CONF_BASE_DIR="/etc"
-      INIT_BASE_DIR="/etc/init.d"
-      STATUS_FILE="/usr/lib/opkg/status"
-      OPKG_CONF_DIR="/etc/opkg"
       ;;
   esac
 }
@@ -781,8 +772,8 @@ run_remote_sh() {
   shift 2 2>/dev/null || shift $#
   _kill_stale_remote_sh
   tmp="/tmp/nfqws-remote-$$.sh"
-  # при INT/TERM/EXIT — гарантированно убить дочерний remote, иначе остаются зомби sh
-  trap 'if [ -n "${_rpid:-}" ]; then kill -9 "$_rpid" 2>/dev/null || true; fi; rm -f /tmp/nfqws-remote-$$.sh 2>/dev/null; _run_remote_sh_restore_traps' EXIT INT TERM
+  # при HUP/INT/TERM/EXIT — гарантированно убить дочерний remote, иначе остаются зомби sh
+  trap 'if [ -n "${_rpid:-}" ]; then kill -9 "$_rpid" 2>/dev/null || true; fi; rm -f /tmp/nfqws-remote-$$.sh 2>/dev/null; _run_remote_sh_restore_traps' EXIT HUP INT TERM
 
   if ! download_sh_validated "$url" "$tmp" "$min_bytes"; then
     error "Не удалось скачать целый скрипт: $url"
@@ -1190,19 +1181,9 @@ refresh_proc_cache() {
   PROC_CACHE=$(ps w 2>/dev/null || ps 2>/dev/null || true)
 }
 
-# Без fork: shell-цикл по кэшу
+# Без fork: использует pkg_version
 is_installed() {
-  local line pref
-  [ -n "$OPKG_INSTALLED_CACHE" ] || refresh_opkg_cache
-  pref="$1 - "
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      "$pref"*) return 0 ;;
-    esac
-  done <<EOF
-$OPKG_INSTALLED_CACHE
-EOF
-  return 1
+  pkg_version "$1" >/dev/null
 }
 
 # Без grep/sed/head — один shell-цикл по кэшу
@@ -1337,7 +1318,14 @@ show_installed() {
     WEB_UP="$web_up" AWG_UP="$awg_up" \
     G="$GREEN" N="$NC" R="${RUN_MARK}" U="${UPD_MARK}" D="$DIM" \
     awk -v none="$LBL_NONE" '
+    function ver_norm(v) {
+      sub(/^[vV]/, "", v)
+      sub(/\+.*/, "", v)
+      if (!sub(/-r[0-9]+$/, "", v)) sub(/-[0-9]+$/, "", v)
+      return v
+    }
     function ver_gt(a, b,   i, na, nb, xa, xb, ca, cb) {
+      a = ver_norm(a); b = ver_norm(b)
       if (a == "" || b == "" || a == b) return 0
       na = split(a, A, /[^0-9A-Za-z]+/)
       nb = split(b, B, /[^0-9A-Za-z]+/)
@@ -1787,7 +1775,7 @@ menu_install_ipk_direct() {
     echo
     printf '%s\n' "${BOLD}── ${LBL_INSTALL_DIRECT:-Прямая установка .ipk / .apk} ──${NC}"
     printf '%s\n' "${DIM}Скачивание standalone-пакетов с релизов GitHub / ghproxy.${NC}"
-    printf '%s\n' "${DIM}Формат пакета для текущей системы: %s${NC}" "$(pkg_backend)"
+    printf '%s%s%s\n' "${DIM}Формат пакета для текущей системы: " "$(pkg_backend)" "${NC}"
     echo
     printf "  %s1)%s  nfqws-keenetic (версия 1)\n" "$GREEN" "$NC"
     printf "  %s2)%s  nfqws2-keenetic (версия 2)\n" "$GREEN" "$NC"
@@ -1921,24 +1909,32 @@ list_strategies() {
 
 
 detect_isp_interface() {
-  local iface=""
-  # 1) OpenWrt ubus / uci (приоритет реальному WAN-интерфейсу роутера)
+  local iface="" wan_json up
+  # 1) OpenWrt ubus / uci (приоритет активному WAN-интерфейсу роутера)
   if command -v ubus >/dev/null 2>&1; then
-    iface=$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null || true)
-    [ -z "$iface" ] && iface=$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.device' 2>/dev/null || true)
-    [ -z "$iface" ] && iface=$(ubus call network.interface.wan6 status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null || true)
+    wan_json=$(ubus call network.interface.wan status 2>/dev/null || true)
+    up=$(printf '%s' "$wan_json" | jsonfilter -e '@.up' 2>/dev/null || true)
+    if [ "$up" = "true" ]; then
+      iface=$(printf '%s' "$wan_json" | jsonfilter -e '@.l3_device' 2>/dev/null || true)
+      [ -z "$iface" ] && iface=$(printf '%s' "$wan_json" | jsonfilter -e '@.device' 2>/dev/null || true)
+    fi
+    if [ -z "$iface" ]; then
+      wan_json=$(ubus call network.interface.wan6 status 2>/dev/null || true)
+      up=$(printf '%s' "$wan_json" | jsonfilter -e '@.up' 2>/dev/null || true)
+      [ "$up" = "true" ] && iface=$(printf '%s' "$wan_json" | jsonfilter -e '@.l3_device' 2>/dev/null || true)
+    fi
   fi
   if [ -z "$iface" ] && command -v uci >/dev/null 2>&1; then
     iface=$(uci -q get network.wan.device || uci -q get network.wan.ifname || uci -q get network.wan6.device || uci -q get network.wan6.ifname || true)
   fi
-  # 2) ip route (с фильтрацией туннельных интерфейсов WireGuard/OpenVPN/Tailscale)
+  # 2) ip route (с фильтрацией туннельных интерфейсов VPN/контейнеров/мостов)
   if [ -z "$iface" ] && command -v ip >/dev/null 2>&1; then
     iface=$(ip route 2>/dev/null | awk '
       /^default/ {
         for (i=1; i<=NF; i++) {
           if ($i == "dev") {
             d = $(i+1)
-            if (d !~ /^(wg|tun|tap|tailscale|docker|br-)/) {
+            if (d !~ /^(wg|awg|nwg|tun|tap|t2s|singtun|sing|ovpn|tailscale|docker|veth|br-)/) {
               print d
               found = 1
               exit
@@ -1998,7 +1994,7 @@ set_isp_interface_line() {
 
 # $1=conf  $2=опционально: ISP из конфига ДО смены стратегии (эталон для сравнения)
 fix_isp_interface() {
-  local conf="$1" preferred="${2:-}" detected current ipv6_val current_ipv6 chosen iface_for_v6 conf_isp ans
+  local conf="$1" preferred="${2:-}" detected current ipv6_val current_ipv6 chosen iface_for_v6 conf_isp ans _v6tmp
   detected=$(detect_isp_interface)
   if [ -z "$detected" ]; then
     warn "Не удалось определить интерфейс провайдера (route/ip route)."
@@ -2075,9 +2071,16 @@ fix_isp_interface() {
       sed -i "s|^IPV6_ENABLED=.*|IPV6_ENABLED=$ipv6_val|" "$conf"
     else
       if grep -qE '^ISP_INTERFACE=' "$conf" 2>/dev/null; then
-        sed -i "/^ISP_INTERFACE=/a IPV6_ENABLED=$ipv6_val" "$conf"
+        _v6tmp="${conf}.new.$$"
+        awk -v v="$ipv6_val" '
+          !done && /^ISP_INTERFACE=/ { print; print "IPV6_ENABLED=" v; done=1; next }
+          { print }
+        ' "$conf" > "$_v6tmp" && mv -f "$_v6tmp" "$conf"
+        rm -f "$_v6tmp"
       else
-        printf 'IPV6_ENABLED=%s\n' "$ipv6_val" | cat - "$conf" > "${conf}.new" && mv "${conf}.new" "$conf"
+        _v6tmp="${conf}.new.$$"
+        printf 'IPV6_ENABLED=%s\n' "$ipv6_val" | cat - "$conf" > "$_v6tmp" && mv -f "$_v6tmp" "$conf"
+        rm -f "$_v6tmp"
       fi
     fi
     info "IPV6_ENABLED=$ipv6_val записан в $conf"
@@ -2172,12 +2175,87 @@ check_conf_files() {
   done
 }
 
+# Пост/пре-проверка SHA256 одного blob: 0 = OK (или эталон недоступен), 1 = несовпадение.
+_blob_verify_sha256() {
+  local sums_ok="$1" name="$2" path="$3" mode="$4" expected local_sha
+  if [ "$sums_ok" -eq 1 ] && have_sha256; then
+    expected=$(blob_expected_sha256 "$name")
+    if [ -n "$expected" ]; then
+      local_sha=$(file_sha256 "$path" || true)
+      if [ -n "$local_sha" ] && [ "$local_sha" = "$expected" ]; then
+        if [ "$mode" = "check" ]; then
+          info "  OK  $path  (sha256)"
+        else
+          info "  готово (sha256 OK)"
+        fi
+        return 0
+      fi
+      if [ "$mode" = "check" ]; then
+        warn "  устарел/повреждён $path"
+      else
+        warn "  скачан, но sha256 не совпал — удаляю $path"
+      fi
+      [ -n "$local_sha" ] && info "    local  $local_sha"
+      info "    expect $expected"
+      return 1
+    fi
+    if [ "$mode" = "check" ]; then
+      info "  OK  $path  (нет в SHA256SUMS)"
+    else
+      info "  готово (нет эталона в SHA256SUMS)"
+    fi
+    return 0
+  fi
+  if [ "$mode" = "check" ]; then
+    info "  OK  $path"
+  else
+    info "  готово"
+  fi
+  return 0
+}
+
+# Добавить --blob=NAME:@PATH в NFQWS_BASE_ARGS конфига, если ещё не объявлен.
+# $4 — опциональный выходной файл (иначе меняет $1 in-place).
+_conf_ensure_blob_arg() {
+  local conf="$1" blob_name="$2" blob_path="$3" out="${4:-}" tmp
+  tmp="${out:-${conf}.blob.$$}"
+  awk -v blob="--blob=${blob_name}:@${blob_path}" '
+    BEGIN { done = 0 }
+    !done && /^NFQWS_BASE_ARGS="/ {
+      line = $0
+      sub(/[ \t\r]+$/, "", line)
+      if (line ~ /"$/ && line != "NFQWS_BASE_ARGS=\"") {
+        sub(/"$/, "", line)
+        print line " " blob "\""
+      } else {
+        print line
+        print "                 " blob
+      }
+      done = 1
+      next
+    }
+    { print }
+    END {
+      if (!done) {
+        print ""
+        print "# added by nfqws-menu"
+        print "NFQWS_BASE_ARGS=\"${NFQWS_BASE_ARGS} " blob "\""
+      }
+    }
+  ' "$conf" > "$tmp" || { [ -z "$out" ] && rm -f "$tmp"; return 1; }
+  [ -s "$tmp" ] || { [ -z "$out" ] && rm -f "$tmp"; return 1; }
+  if [ -z "$out" ]; then
+    mv -f "$tmp" "$conf" || { rm -f "$tmp"; return 1; }
+  fi
+  return 0
+}
+
 # Проверка blobs: наличие + SHA256 (по strategies/blobs/SHA256SUMS).
 # Устаревшие/битые и отсутствующие предлагается скачать.
 # $1=ver (не используется, совместимость) $2=conf
 check_blobs() {
   local conf="$2"
-  local paths path name missing=0 missing_list="" expected local_sha sums_ok=0
+  local paths path name missing=0 missing_list="" sums_ok=0
 
   if [ ! -f "$conf" ]; then
     warn "Конфиг $conf не найден — проверка blobs пропущена."
@@ -2206,25 +2284,9 @@ check_blobs() {
       missing_list="$missing_list $path"
       continue
     fi
-
-    if [ "$sums_ok" -eq 1 ] && have_sha256; then
-      expected=$(blob_expected_sha256 "$name")
-      if [ -n "$expected" ]; then
-        local_sha=$(file_sha256 "$path" || true)
-        if [ -n "$local_sha" ] && [ "$local_sha" = "$expected" ]; then
-          info "  OK  $path  (sha256)"
-        else
-          warn "  устарел/повреждён $path"
-          [ -n "$local_sha" ] && info "    local  $local_sha"
-          info "    expect $expected"
-          missing=1
-          missing_list="$missing_list $path"
-        fi
-      else
-        info "  OK  $path  (нет в SHA256SUMS)"
-      fi
-    else
-      info "  OK  $path"
+    if ! _blob_verify_sha256 "$sums_ok" "$name" "$path" "check"; then
+      missing=1
+      missing_list="$missing_list $path"
     fi
   done
 
@@ -2242,25 +2304,7 @@ check_blobs() {
       warn "  нет в репозитории / ошибка загрузки — файл не создан ($name)"
       continue
     fi
-    # пост-проверка SHA при наличии эталона
-    if [ "$sums_ok" -eq 1 ] && have_sha256; then
-      expected=$(blob_expected_sha256 "$name")
-      if [ -n "$expected" ]; then
-        local_sha=$(file_sha256 "$path" || true)
-        if [ -n "$local_sha" ] && [ "$local_sha" = "$expected" ]; then
-          info "  готово (sha256 OK)"
-        else
-          warn "  скачан, но sha256 не совпал — удаляю $path"
-          [ -n "$local_sha" ] && info "    local  $local_sha"
-          info "    expect $expected"
-          rm -f "$path"
-        fi
-      else
-        info "  готово (нет эталона в SHA256SUMS)"
-      fi
-    else
-      info "  готово"
-    fi
+    _blob_verify_sha256 "$sums_ok" "$name" "$path" "post" || rm -f "$path"
   done
 }
 
@@ -2363,15 +2407,15 @@ apply_strategy() {
   # на OpenWrt пакет живёт в /etc/nfqws*, подменяем префикс путей.
   strategy_retarget_paths "$tmp"
 
-  backup_file "$conf_dest"
-
   if grep -qE '^(ISP_INTERFACE|NFQWS_ARGS|NFQWS_BASE_ARGS)=' "$tmp" 2>/dev/null; then
+    backup_file "$conf_dest"
     cp "$tmp" "$conf_dest"
     info "Конфиг полностью заменён стратегией $conf_name"
   else
     warn "Файл стратегии не выглядит как полный конфиг — попробуйте вручную."
     cat "$tmp"
     rm -f "$tmp"
+    [ "$stopped_svc" -eq 1 ] && service_restart "$init_script"
     return 1
   fi
   rm -f "$tmp"
@@ -2626,14 +2670,8 @@ _list_file_clean() {
   [ "$_LIST_CLEAN_COUNT" -gt 0 ]
 }
 
-# Скачать URL → tmp (очищенный in-place). Выставляет count. 0=ok, 1=ошибка.
-_ipset_fetch_clean() {
-  local url="$1" tmp="$2"
-  info "URL: $url"
-  if ! download_file "$url" "$tmp"; then
-    error "Не удалось скачать список."
-    return 1
-  fi
+_clean_downloaded_list() {
+  local tmp="$1"
   if ! _list_file_clean "$tmp" "${tmp}.clean"; then
     error "Скачанный файл пуст или не содержит записей."
     rm -f "$tmp" "${tmp}.clean"
@@ -2642,6 +2680,17 @@ _ipset_fetch_clean() {
   mv -f "${tmp}.clean" "$tmp"
   info "Записей в списке: $_LIST_CLEAN_COUNT"
   return 0
+}
+
+# Скачать URL → tmp (очищенный in-place). Выставляет count. 0=ok, 1=ошибка.
+_ipset_fetch_clean() {
+  local url="$1" tmp="$2"
+  info "URL: $url"
+  if ! download_file "$url" "$tmp"; then
+    error "Не удалось скачать список."
+    return 1
+  fi
+  _clean_downloaded_list "$tmp"
 }
 
 _ipset_write_file() {
@@ -2947,13 +2996,7 @@ update_rkn_list() {
       return 1
     fi
 
-    if ! _list_file_clean "$tmp" "${tmp}.clean"; then
-      error "Скачанный файл пуст или не содержит записей."
-      rm -f "$tmp" "${tmp}.clean"
-      return 1
-    fi
-    mv -f "${tmp}.clean" "$tmp"
-    info "Записей в списке: $_LIST_CLEAN_COUNT"
+    _clean_downloaded_list "$tmp" || return 1
   fi
 
   case "$NFQWS_VER" in
@@ -3001,26 +3044,47 @@ DOT_DOH_STRATEGY_NFQWS2='#DNS
 DOT_DOH_STRATEGY_NFQWS1='#DNS
 --filter-tcp=443,853 --filter-l7=http,tls --hostlist-domains=dns.iij.jp,dot.sb,dns.sb,doh.sb,dns.google,dot.pub,doh.pub,controld.com,opendns.com,anycast.censurfridns.dk,dns.alidns.com,libredns.gr,cloudflare-dns.com,one.one.one.one,opennameserver.org,cleanbrowsing.org,dns.adguard-dns.com,dns.comss.one,xbox-dns.ru,dns.malw.link,geohide.ru,dns.nextdns.io,dns10.quad9.net,dns.astracat.network,dns.bezmezhau.com,dns.dns-ai.ru,dns.mafioznik.xyz,free.shecan.ir --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,host+2,midsld+2,endsld-2 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
 --new
---filter-tcp=443,853 --filter-l7=http,tls --ipset-ip=104.16.248.249,104.16.249.249,91.239.100.100,89.233.43.71,8.8.8.8,8.8.4.4,1.12.12.12,120.53.53.120,208.67.222.222,208.67.220.220,223.5.5.5,223.6.6.6,116.202.176.26,1.1.1.1,1.0.0.1,1.1.1.2,1.0.0.2,1.1.1.3,1.0.0.3,217.160.70.42,213.202.211.221,81.169.136.222,185.181.61.24,185.228.168.9,185.228.169.9,94.140.14.14,94.140.15.15,94.140.14.140,94.140.14.141,94.140.14.15,94.140.15.16,45.90.28.94,45.90.30.94,76.76.2.11,76.76.10.11,9.9.9.9,9.9.9.10,149.112.112.112,185.222.222.222,45.11.45.11,172.104.93.80 --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,27 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
+--filter-tcp=443,853 --filter-l7=http,tls --ipset-ip=104.16.248.249,104.16.249.249,91.239.100.100,89.233.43.71,8.8.8.8,8.8.4.4,1.12.12.12,120.53.53.53,208.67.222.222,208.67.220.220,223.5.5.5,223.6.6.6,116.202.176.26,1.1.1.1,1.0.0.1,1.1.1.2,1.0.0.2,1.1.1.3,1.0.0.3,217.160.70.42,213.202.211.221,81.169.136.222,185.181.61.24,185.228.168.9,185.228.169.9,94.140.14.14,94.140.15.15,94.140.14.140,94.140.14.141,94.140.14.15,94.140.15.16,45.90.28.94,45.90.30.94,76.76.2.11,76.76.10.11,9.9.9.9,9.9.9.10,149.112.112.112,185.222.222.222,45.11.45.11,172.104.93.80 --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,27 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
 --new
 --filter-udp=443,853 --filter-l7=quic --hostlist-domains=cloudflare-dns.com,dns.adguard-dns.com,dns.nextdns.io,nextdns.io,dns.google,controld.com --dpi-desync=ipfrag2 --dpi-desync-ipfrag-pos-udp=88'
 
 ensure_port_in_var() {
-  local conf_file="$1" var="$2" port="$3" line val new_val
+  local conf_file="$1" var="$2" port="$3" line raw val comment="" q="" new_val out_line tmp
   line=$(grep -E "^${var}=" "$conf_file" 2>/dev/null | head -1)
   if [ -z "$line" ]; then
     printf '%s=%s\n' "$var" "$port" >> "$conf_file"
     info "${var}: создано со значением $port"
     return 0
   fi
-  val=${line#${var}=}
-  val=$(echo "$val" | tr -d '"' | tr -d "'")
+  raw=${line#${var}=}
+  case "$raw" in
+    *[[:space:]]\#*)
+      comment=" #${raw#*[[:space:]]#}"
+      raw=${raw%%[[:space:]]#*}
+      ;;
+    \#*)
+      comment=" $raw"
+      raw=""
+      ;;
+  esac
+  raw=$(printf '%s' "$raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  case "$raw" in
+    \"*\") q='"' ;;
+    \'*\') q="'" ;;
+  esac
+  val=$(printf '%s' "$raw" | tr -d "'\"")
   if echo ",$val," | grep -qE ",${port},"; then
     info "${var}: порт $port уже есть ($val)"
     return 0
   fi
   if [ -z "$val" ]; then new_val="$port"; else new_val="${val},${port}"; fi
-  sed -i "s|^${var}=.*|${var}=${new_val}|" "$conf_file"
+  out_line="${var}=${q}${new_val}${q}${comment}"
+  tmp="${conf_file}.port.$$"
+  awk -v var="$var" -v rep="$out_line" '
+    !done && $0 ~ "^" var "=" { print rep; done=1; next }
+    { print }
+  ' "$conf_file" > "$tmp" && [ -s "$tmp" ] && mv -f "$tmp" "$conf_file"
+  rm -f "$tmp"
   info "${var}: добавлен порт $port → ${new_val}"
 }
 
@@ -3104,7 +3168,6 @@ inject_custom_strategy() {
           in_block=0
           ;;
         *\")
-          local body
           body=${line%\"}
           if [ -n "$(echo "$body" | tr -d '[:space:]\\')" ]; then
             printf '%s\n' "$body" >> "$tmp"
@@ -3178,6 +3241,20 @@ apply_dot_doh_for_ver() {
   rm -f "$strat_tmp"
 
   info "Стратегия DoT/DoH (dns_filter_nfqws${ver}) добавлена в NFQWS_ARGS_CUSTOM."
+
+  if [ "$ver" = "2" ] && ! grep -qE -- '--blob=tls_clienthello:' "$conf" 2>/dev/null; then
+    local blob_path
+    blob_path="$(nfqws_blobs_dir 2)/tls_clienthello.bin"
+    if _conf_ensure_blob_arg "$conf" "tls_clienthello" "$blob_path"; then
+      info "В NFQWS_BASE_ARGS добавлен --blob=tls_clienthello:@${blob_path}"
+    else
+      warn "Не удалось добавить --blob=tls_clienthello:@${blob_path} в NFQWS_BASE_ARGS."
+    fi
+  fi
+
+  echo
+  info "=== Проверка blobs [nfqws${ver}] ==="
+  check_blobs "$ver" "$conf"
 
   echo
   info "=== Проверка портов 853 (DoT) [nfqws${ver}] ==="
@@ -3744,14 +3821,14 @@ owrt_route_del_all() {
 }
 
 owrt_del_server_menu() {
-  local n=0 ids="" id port uri pick port_del d p idx cur_id
+  local n=0 entries="" ent id port uri pick port_del="" d p idx cur_id cur_port seen_del=0
   echo
   printf '%s\n' "${BOLD}Удаление DoH-сервера:${NC}"
   while IFS='|' read -r id port uri; do
     [ -n "$id" ] || continue
     n=$((n + 1))
     printf ' %s) %s %s(127.0.0.1#%s)%s\n' "$n" "$uri" "$DIM" "$port" "$NC"
-    ids="$ids $id"
+    entries="$entries ${id}|${port}"
   done <<EOF
 $(hdp_instances)
 EOF
@@ -3765,11 +3842,31 @@ EOF
   esac
   [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] || { warn "${LBL_INVALID}"; return 0; }
   idx=0
-  for cur_id in $ids; do
+  for ent in $entries; do
     idx=$((idx + 1))
-    [ "$idx" -eq "$pick" ] && { id="$cur_id"; break; }
+    if [ "$idx" -eq "$pick" ]; then
+      id=${ent%%|*}
+      port_del=${ent#*|}
+      break
+    fi
   done
-  port_del=$(uci -q get "https-dns-proxy.$id.listen_port" 2>/dev/null)
+  [ -z "$port_del" ] && port_del=$(uci -q get "https-dns-proxy.$id.listen_port" 2>/dev/null)
+  # Если удаляемая секция была на авто-порту (без listen_port), фиксируем текущие
+  # авто-порты последующих секций, чтобы при удалении их порты не сдвинулись.
+  if [ -z "$(uci -q get "https-dns-proxy.$id.listen_port" 2>/dev/null)" ]; then
+    for ent in $entries; do
+      cur_id=${ent%%|*}
+      cur_port=${ent#*|}
+      if [ "$cur_id" = "$id" ]; then
+        seen_del=1
+        continue
+      fi
+      [ "$seen_del" -eq 1 ] || continue
+      if [ -z "$(uci -q get "https-dns-proxy.$cur_id.listen_port" 2>/dev/null)" ] && [ -n "$cur_port" ]; then
+        uci set "https-dns-proxy.$cur_id.listen_port=$cur_port"
+      fi
+    done
+  fi
   uci -q delete "https-dns-proxy.$id"
   uci commit https-dns-proxy
   if [ -n "$port_del" ]; then
@@ -3928,7 +4025,11 @@ host_entries_apply() {
   } > "$block"
   n_dom=$(wc -l < "${block}.body" 2>/dev/null | tr -d ' ')
   hosts_strip_block /etc/hosts > "${block}.base"
-  cat "${block}.base" "$block" > /etc/hosts.nfqws.new && \
+  {
+    # awk гарантирует завершающий \n перед маркером, если /etc/hosts не оканчивался LF
+    [ -s "${block}.base" ] && awk '{ print }' "${block}.base"
+    cat "$block"
+  } > /etc/hosts.nfqws.new && \
     mv -f /etc/hosts.nfqws.new /etc/hosts
   rm -f /etc/hosts.nfqws.new "$block" "${block}.base" "${block}.body" "$merged"
   info "Записано: /etc/hosts (записей в блоке: ${n_dom:-0})."
@@ -3944,6 +4045,7 @@ menu_update_hosts() {
   info "Загрузка hosts..."
   if ! download_file "$hosts_url" "$tmp"; then
     error "Не удалось загрузить $hosts_url"
+    rm -f "$tmp" "$sec_file"
     return 1
   fi
 
@@ -4672,6 +4774,7 @@ tg_ws_proxy_rs_probe() {
   }
 
   out=$(
+    trap 'rm -f "/tmp/tgws-conf.$$"' EXIT INT TERM
     scrub_and_source() {
       tr -d '\r' < "$1" > "/tmp/tgws-conf.$$" 2>/dev/null || true
       if [ -f "/tmp/tgws-conf.$$" ]; then
@@ -5467,7 +5570,7 @@ parse_fake_blobs() {
   awk -v mapf="$map_file" -v listf="$list_file" '
   function basename(p,   n, a) {
     gsub(/["\047]/, "", p)
-    if (p ~ /^0[xX]*/) return "(hex)"
+    if (p ~ /^0[xX][0-9a-fA-F]+/) return "(hex)"
     n = split(p, a, "/")
     return (n > 0 && a[n] != "") ? a[n] : p
   }
@@ -5588,7 +5691,12 @@ list_repo_blobs() {
     tls_clienthello_sochi_park.bin tls_clienthello_steam_chat_com.bin \
     tls_clienthello_steamstatic_com.bin tls_clienthello_teamspeak_com.bin \
     tls_clienthello_www_google_com.bin tls_clienthello_www_sferum_ru.bin \
-    tls_lordfilm.bin tls_magnit.bin
+    tls_gosuslugi.bin tls_lordfilm.bin tls_magnit.bin tls_sber.bin
+}
+
+_fb_tmp_cleanup() {
+  rm -f "/tmp/nfqws-fakeblob-map-$$" "/tmp/nfqws-fakeblob-list-$$" "/tmp/nfqws-blob-cands-$$" \
+        "/tmp/nfqws-local-blobs-$$" "/tmp/nfqws-repo-blobs-$$" "/tmp/nfqws-fakeblob-edit-$$.conf" 2>/dev/null || true
 }
 
 
@@ -5608,8 +5716,12 @@ menu_change_fake_blob() {
   list_file="/tmp/nfqws-fakeblob-list-$$"
   cand_file="/tmp/nfqws-blob-cands-$$"
   _fb_cleanup() {
-    rm -f "$map_file" "$list_file" "$cand_file" /tmp/nfqws-local-blobs-$$ /tmp/nfqws-repo-blobs-$$
+    _fb_tmp_cleanup
+    _run_remote_sh_restore_traps
   }
+  trap '_fb_tmp_cleanup; upd_cleanup 2>/dev/null || true; exit 129' HUP
+  trap '_fb_tmp_cleanup; upd_cleanup 2>/dev/null || true; exit 130' INT
+  trap '_fb_tmp_cleanup; upd_cleanup 2>/dev/null || true; exit 143' TERM
 
   echo
   info "Анализ конфига: $conf"
@@ -5728,33 +5840,7 @@ menu_change_fake_blob() {
     sed -E "s|--blob=${sel_name}:[^[:space:]\"]*|--blob=${sel_name}:@${new_path}|g" "$conf" > "$tmp"
   else
     warn "В конфиге нет --blob=${sel_name}:... — добавляю в NFQWS_BASE_ARGS."
-    # awk вместо ручного цикла: однострочный NFQWS_BASE_ARGS="…" — внутрь кавычек,
-    # открытие многострочного — аргументом строкой ниже, переменной нет —
-    # переопределение в конце (раскрывается при source конфига).
-    awk -v blob="--blob=${sel_name}:@${new_path}" '
-      BEGIN { done = 0 }
-      !done && /^NFQWS_BASE_ARGS="/ {
-        line = $0
-        sub(/[ \t\r]+$/, "", line)
-        if (line ~ /"$/ && line != "NFQWS_BASE_ARGS=\"") {
-          sub(/"$/, "", line)
-          print line " " blob "\""
-        } else {
-          print line
-          print "                 " blob
-        }
-        done = 1
-        next
-      }
-      { print }
-      END {
-        if (!done) {
-          print ""
-          print "# added by nfqws-menu"
-          print "NFQWS_BASE_ARGS=\"${NFQWS_BASE_ARGS} " blob "\""
-        }
-      }
-    ' "$conf" > "$tmp"
+    _conf_ensure_blob_arg "$conf" "$sel_name" "$new_path" "$tmp" || : > "$tmp"
   fi
 
   if [ ! -s "$tmp" ]; then
@@ -5898,30 +5984,44 @@ menu_remove() {
 # ---------------------------------------------------------------------------
 # Сервисные утилиты (S / U)
 # ---------------------------------------------------------------------------
+# opkg/apk без простыни вывода (при ошибке печатается хвост лога).
+_opkg_quiet() {
+  local log="/tmp/nfqws-opkg-quiet.$$.log" rc=0
+  if "$@" >"$log" 2>&1; then
+    rm -f "$log"
+    return 0
+  fi
+  rc=$?
+  warn "команда завершилась с ошибкой ($rc): $*"
+  tail -25 "$log" 2>/dev/null || true
+  rm -f "$log"
+  return "$rc"
+}
+
 opkg_upgrade_all() {
+  local pkgs="" dpi_loc="" dpi_rem=""
   echo
   info "$LBL_U"
   if [ "$(pkg_backend)" = "apk" ]; then
     info "apk update && apk upgrade ..."
-    if ! pkg_update; then
+    if ! _opkg_quiet pkg_update; then
       error "apk update не удался."
       return 1
     fi
-    if ! apk upgrade; then
+    if ! _opkg_quiet apk upgrade; then
       error "apk upgrade не удался."
       return 1
     fi
   else
     info "opkg update ..."
-    if ! opkg update; then
+    if ! _opkg_quiet opkg update; then
       error "opkg update не удался."
       return 1
     fi
-    local pkgs
     pkgs=$(opkg list-upgradable 2>/dev/null | awk '{print $1}')
     if [ -n "$pkgs" ]; then
       info "Обновление доступных пакетов: $(printf '%s ' $pkgs)"
-      if ! opkg upgrade $pkgs; then
+      if ! _opkg_quiet opkg upgrade $pkgs; then
         error "opkg upgrade не удался."
         return 1
       fi
@@ -5932,17 +6032,23 @@ opkg_upgrade_all() {
   refresh_opkg_cache
   info "Обновление пакетов завершено."
 
-  # dpi-detector ставится не через opkg — обновляем отдельно, если уже установлен
+  # dpi-detector ставится не через opkg — обновляем, если локальная версия устарела
   if [ -x "$(dpi_detector_bin)" ]; then
-    info "Найден $(dpi_detector_bin) — обновление..."
-    export DPI_INSTALL_DIR="/usr/bin"
-    if run_remote_sh "${DPI_DETECTOR_INSTALL_URL:-https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh}"; then
-      if [ ! -x /usr/bin/dpi-detector ] && [ -x /tmp/dpi-detector ]; then
-        cp -f /tmp/dpi-detector /usr/bin/dpi-detector 2>/dev/null && chmod +x /usr/bin/dpi-detector
-      fi
-      info "dpi-detector обновлён."
+    dpi_loc=$(dpi_detector_version 2>/dev/null || true)
+    dpi_rem=$(upd_release_tag_any "Runnin4ik/dpi-detector" 2>/dev/null || true)
+    if [ -n "$dpi_loc" ] && [ -n "$dpi_rem" ] && ! ver_gt "$dpi_rem" "$dpi_loc"; then
+      info "dpi-detector ${dpi_loc} — актуален."
     else
-      warn "Не удалось обновить dpi-detector."
+      info "Обновление dpi-detector${dpi_loc:+ ($dpi_loc → ${dpi_rem:-latest})}..."
+      export DPI_INSTALL_DIR="/usr/bin"
+      if run_remote_sh "${DPI_DETECTOR_INSTALL_URL:-https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh}"; then
+        if [ ! -x /usr/bin/dpi-detector ] && [ -x /tmp/dpi-detector ]; then
+          cp -f /tmp/dpi-detector /usr/bin/dpi-detector 2>/dev/null && chmod +x /usr/bin/dpi-detector
+        fi
+        info "dpi-detector обновлён."
+      else
+        warn "Не удалось обновить dpi-detector."
+      fi
     fi
   fi
 }
@@ -6251,7 +6357,7 @@ service_mirror_menu() {
 _opkg_repair_status() {
   local st="${1:-}" bak tmp fixed n0 n1 nuls candidate
   if [ -z "$st" ]; then
-    for candidate in /usr/lib/opkg/status /var/lib/opkg/status /opt/lib/opkg/status; do
+    for candidate in /usr/lib/opkg/status /var/lib/opkg/status; do
       if [ -f "$candidate" ]; then
         st="$candidate"
         break
@@ -6294,8 +6400,19 @@ _opkg_repair_status() {
 service_opkg_repair() {
   echo
   info "$LBL_S3"
+  if [ "$(pkg_backend)" = "apk" ]; then
+    info "Обнаружен пакетный менеджер apk (OpenWrt 25.x) — база opkg/status не используется."
+    info "Проверка целостности базы apk..."
+    if apk list --installed >/dev/null 2>&1; then
+      info "APK работает штатно."
+    else
+      warn "apk сообщает об ошибке."
+    fi
+    pause_press_enter
+    return 0
+  fi
   local st="" candidate
-  for candidate in /usr/lib/opkg/status /var/lib/opkg/status /opt/lib/opkg/status; do
+  for candidate in /usr/lib/opkg/status /var/lib/opkg/status; do
     if [ -f "$candidate" ]; then
       st="$candidate"
       break
@@ -6486,7 +6603,7 @@ _menu_is_menu_pid() {
   c=$(tr -d '\0' < "/proc/$p/cmdline" 2>/dev/null)
   # без широкого */nfqws-menu*: под него попадали tail/vim/less на файлах меню
   case "$c" in
-    *nfqws-menu.sh*|*'/bin/menu'*|*'/usr/bin/menu'*|*'/opt/bin/menu'*) return 0 ;;
+    *nfqws-menu.sh*|*'/bin/menu'*|*'/usr/bin/menu'*) return 0 ;;
   esac
   return 1
 }
@@ -6576,8 +6693,8 @@ upd_local() {
   return 0
 }
 
-# Нормализация для сравнения: v1.2.3+r3 → 1.2.3; 1.2.3-1 → 1.2.3
-# (build +r3 / opkg -N не считаются «новее upstream»).
+# Нормализация для сравнения: v1.2.3+r3 → 1.2.3; 1.2.3-1 → 1.2.3; 1.2.3-r0 → 1.2.3
+# (build +rN / opkg -N / apk -rN не считаются «новее upstream»).
 # Zero-fork реализация на чистом ash/POSIX shell (без вызовов sed/awk).
 ver_norm() {
   local v="$1" tail
@@ -6585,6 +6702,7 @@ ver_norm() {
   case "$v" in *+*) v="${v%%+*}" ;; esac
   case "$v" in *-*)
     tail="${v##*-}"
+    case "$tail" in r[0-9]*) tail="${tail#r}" ;; esac
     case "$tail" in ''|*[!0-9]*) ;; *) v="${v%-*}" ;; esac
     ;;
   esac
@@ -6655,6 +6773,13 @@ upd_legend() {
   return 0
 }
 
+_check_upd_redraw() {
+  [ "$UPD_REDRAW" = 1 ] || return 1
+  UPD_REDRAW=0
+  READ_RC=1
+  return 0
+}
+
 # Чтение выбора с оглядкой на фоновую проверку. READ_RC: 0 — ввод получен,
 # 1 — перерисовать (пришла проверка), 2 — stdin закрыт (меню завершается).
 # На BusyBox/ash USR1 часто НЕ прерывает блокирующий read — поэтому на TTY
@@ -6664,11 +6789,7 @@ read_choice() {
   READ_RC=0
   if [ -t 0 ]; then
     while true; do
-      if [ "$UPD_REDRAW" = 1 ]; then
-        UPD_REDRAW=0
-        READ_RC=1
-        return 1
-      fi
+      _check_upd_redraw && return 1
       # сессия умерла (SSH drop) — не крутить CPU
       if [ ! -t 0 ]; then
         READ_RC=2
@@ -6682,22 +6803,14 @@ read_choice() {
         READ_RC=2
         return 1
       fi
-      if [ "$UPD_REDRAW" = 1 ]; then
-        UPD_REDRAW=0
-        READ_RC=1
-        return 1
-      fi
+      _check_upd_redraw && return 1
     done
   fi
   # не TTY (pipe/скрипт): обычный блокирующий read
   if read_menu "$_var"; then
     return 0
   fi
-  if [ "$UPD_REDRAW" = 1 ]; then
-    UPD_REDRAW=0
-    READ_RC=1
-    return 1
-  fi
+  _check_upd_redraw && return 1
   READ_RC=2
   return 1
 }

@@ -8,6 +8,7 @@
 *.list text eol=lf
 strategies/dns_filter_* text eol=lf
 hosts text eol=lf
+domains_geohide text eol=lf
 SHA256SUMS text eol=lf
 LICENSE text eol=lf
 
