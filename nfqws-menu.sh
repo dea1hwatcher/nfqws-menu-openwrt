@@ -12,7 +12,7 @@
 set -e
 trap '' USR1 2>/dev/null || true
 
-SCRIPT_VERSION="0.2.0"
+SCRIPT_VERSION="0.2.1"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
@@ -1983,13 +1983,18 @@ iface_has_global_ipv6() {
 
 # Записать ISP_INTERFACE="…" в conf (замена или вставка в начало).
 set_isp_interface_line() {
-  local conf="$1" val="$2"
+  local conf="$1" val="$2" tmp
   [ -n "$val" ] || return 0
-  if grep -qE '^ISP_INTERFACE=' "$conf" 2>/dev/null; then
-    sed -i "s|^ISP_INTERFACE=.*|ISP_INTERFACE=\"$val\"|" "$conf"
+  tmp="${conf}.isp.$$"
+  if grep -qE '^[[:space:]]*ISP_INTERFACE=' "$conf" 2>/dev/null; then
+    awk -v v="$val" '
+      !done && /^[[:space:]]*ISP_INTERFACE=/ { print "ISP_INTERFACE=\"" v "\""; done=1; next }
+      { print }
+    ' "$conf" > "$tmp" && mv -f "$tmp" "$conf"
   else
-    printf 'ISP_INTERFACE="%s"\n' "$val" | cat - "$conf" > "${conf}.new" && mv "${conf}.new" "$conf"
+    { printf 'ISP_INTERFACE="%s"\n' "$val"; cat "$conf"; } > "$tmp" && mv -f "$tmp" "$conf"
   fi
+  rm -f "$tmp"
 }
 
 # $1=conf  $2=опционально: ISP из конфига ДО смены стратегии (эталон для сравнения)
@@ -2067,8 +2072,13 @@ fix_isp_interface() {
   if [ "$current_ipv6" = "$ipv6_val" ]; then
     info "IPV6_ENABLED уже = $ipv6_val — без изменений."
   else
-    if grep -qE '^IPV6_ENABLED=' "$conf" 2>/dev/null; then
-      sed -i "s|^IPV6_ENABLED=.*|IPV6_ENABLED=$ipv6_val|" "$conf"
+    if grep -qE '^[[:space:]]*IPV6_ENABLED=' "$conf" 2>/dev/null; then
+      _v6tmp="${conf}.v6.$$"
+      awk -v v="$ipv6_val" '
+        !done && /^[[:space:]]*IPV6_ENABLED=/ { print "IPV6_ENABLED=" v; done=1; next }
+        { print }
+      ' "$conf" > "$_v6tmp" && mv -f "$_v6tmp" "$conf"
+      rm -f "$_v6tmp"
     else
       if grep -qE '^ISP_INTERFACE=' "$conf" 2>/dev/null; then
         _v6tmp="${conf}.new.$$"
@@ -3042,9 +3052,9 @@ DOT_DOH_STRATEGY_NFQWS2='#DNS
 
 # Fallback для nfqws1 (классический dpi-desync)
 DOT_DOH_STRATEGY_NFQWS1='#DNS
---filter-tcp=443,853 --filter-l7=http,tls --hostlist-domains=dns.iij.jp,dot.sb,dns.sb,doh.sb,dns.google,dot.pub,doh.pub,controld.com,opendns.com,anycast.censurfridns.dk,dns.alidns.com,libredns.gr,cloudflare-dns.com,one.one.one.one,opennameserver.org,cleanbrowsing.org,dns.adguard-dns.com,dns.comss.one,xbox-dns.ru,dns.malw.link,geohide.ru,dns.nextdns.io,dns10.quad9.net,dns.astracat.network,dns.bezmezhau.com,dns.dns-ai.ru,dns.mafioznik.xyz,free.shecan.ir --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,host+2,midsld+2,endsld-2 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
+--filter-tcp=443,853 --filter-l7=http,tls --hostlist-domains=dns.iij.jp,dot.sb,dns.sb,doh.sb,dns.google,dot.pub,doh.pub,controld.com,opendns.com,anycast.censurfridns.dk,dns.alidns.com,libredns.gr,cloudflare-dns.com,one.one.one.one,opennameserver.org,cleanbrowsing.org,dns.adguard-dns.com,dns.comss.one,xbox-dns.ru,dns.malw.link,geohide.ru,dns.nextdns.io,dns10.quad9.net,dns.astracat.network,dns.bezmezhau.com,dns.dns-ai.ru,dns.mafioznik.xyz,free.shecan.ir --dpi-desync=fake,multisplit --dpi-desync-split-pos=1,host+2,midsld+2,endsld-2 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
 --new
---filter-tcp=443,853 --filter-l7=http,tls --ipset-ip=104.16.248.249,104.16.249.249,91.239.100.100,89.233.43.71,8.8.8.8,8.8.4.4,1.12.12.12,120.53.53.53,208.67.222.222,208.67.220.220,223.5.5.5,223.6.6.6,116.202.176.26,1.1.1.1,1.0.0.1,1.1.1.2,1.0.0.2,1.1.1.3,1.0.0.3,217.160.70.42,213.202.211.221,81.169.136.222,185.181.61.24,185.228.168.9,185.228.169.9,94.140.14.14,94.140.15.15,94.140.14.140,94.140.14.141,94.140.14.15,94.140.15.16,45.90.28.94,45.90.30.94,76.76.2.11,76.76.10.11,9.9.9.9,9.9.9.10,149.112.112.112,185.222.222.222,45.11.45.11,172.104.93.80 --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,27 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
+--filter-tcp=443,853 --filter-l7=http,tls --ipset-ip=104.16.248.249,104.16.249.249,91.239.100.100,89.233.43.71,8.8.8.8,8.8.4.4,1.12.12.12,120.53.53.53,208.67.222.222,208.67.220.220,223.5.5.5,223.6.6.6,116.202.176.26,1.1.1.1,1.0.0.1,1.1.1.2,1.0.0.2,1.1.1.3,1.0.0.3,217.160.70.42,213.202.211.221,81.169.136.222,185.181.61.24,185.228.168.9,185.228.169.9,94.140.14.14,94.140.15.15,94.140.14.140,94.140.14.141,94.140.14.15,94.140.15.16,45.90.28.94,45.90.30.94,76.76.2.11,76.76.10.11,9.9.9.9,9.9.9.10,149.112.112.112,185.222.222.222,45.11.45.11,172.104.93.80 --dpi-desync=fake,multisplit --dpi-desync-split-pos=1,27 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
 --new
 --filter-udp=443,853 --filter-l7=quic --hostlist-domains=cloudflare-dns.com,dns.adguard-dns.com,dns.nextdns.io,nextdns.io,dns.google,controld.com --dpi-desync=ipfrag2 --dpi-desync-ipfrag-pos-udp=88'
 
@@ -3635,13 +3645,14 @@ owrt_bind_domain_menu() {
 
   echo
   printf '%s\n' "${BOLD}Привязка доменов к DoH-серверу (dnsmasq):${NC}"
-  echo "  1) Instagram & CDN (instagram.com, cdninstagram.com...)"
-  echo "  2) Twitch (gql.twitch.tv, usher.ttvnw.net — реклама/лаги)"
-  echo "  3) Supercell / Brawl Stars (brawlstars, clashofclans, supercell...)"
-  echo "  4) Rutor & NTC.party (rutor.is, ntc.party)"
-  echo "  5) Discord (discord.com, discord.media, discord.gg...)"
-  echo "  6) GeoHide (350+ сервисов с гео-блокировкой РФ: AI Studio, Claude, Cursor...)"
-  echo "  7) Ввести свой домен(ы) вручную"
+  echo "  1) Яндекс DoH (77.88.8.8) ➔ .ru / .su / .рф"
+  echo "  2) Instagram & CDN (instagram.com, cdninstagram.com...)"
+  echo "  3) Twitch (gql.twitch.tv, usher.ttvnw.net — реклама/лаги)"
+  echo "  4) Supercell / Brawl Stars (brawlstars, clashofclans, supercell...)"
+  echo "  5) Rutor & NTC.party (rutor.is, ntc.party)"
+  echo "  6) Discord (discord.com, discord.media, discord.gg...)"
+  echo "  7) GeoHide (350+ сервисов с гео-блокировкой РФ: AI Studio, Claude, Cursor...)"
+  echo "  8) Ввести свой домен(ы) вручную"
   echo "  0) Отмена"
   echo
   ask "${LBL_YOUR_CHOICE} [0]: "
@@ -3650,31 +3661,36 @@ owrt_bind_domain_menu() {
   case "$pchoice" in
     0|"") return 0 ;;
     1)
+      doms="ru su xn--p1ai"
+      rec_name="Yandex Primary DoH"
+      rec_uri="https://77.88.8.8/dns-query"
+      ;;
+    2)
       doms="instagram.com cdninstagram.com igcdn.com ig.me"
       rec_name="CleanBrowsing Security"
       rec_uri="https://doh.cleanbrowsing.org/doh/security-filter/"
       ;;
-    2)
+    3)
       doms="gql.twitch.tv usher.ttvnw.net"
       rec_name="Xbox-DNS"
       rec_uri="https://xbox-dns.ru/dns-query"
       ;;
-    3)
+    4)
       doms="supercell.com supercellid.com brawlstarsgame.com clashofclans.com clashroyaleapp.com supercell.helpshift.com"
       rec_name="NullsProxy"
       rec_uri="https://dns.nullsproxy.com/dns-query"
       ;;
-    4)
+    5)
       doms="rutor.is rutor.info ntc.party"
       rec_name="Malw Link"
       rec_uri="https://dns.malw.link/dns-query"
       ;;
-    5)
+    6)
       doms="discord.com discordapp.com discordapp.net discord.gg discord.media discordcdn.com"
       rec_name="Google DoH"
       rec_uri="https://dns.google/dns-query"
       ;;
-    6)
+    7)
       info "Загрузка списка GeoHide (350+ доменов)..."
       doms=$(_fetch_geohide_domains)
       if [ -z "$doms" ]; then
@@ -3684,7 +3700,7 @@ owrt_bind_domain_menu() {
       rec_name="Geo Hide"
       rec_uri="https://dns.geohide.ru/dns-query"
       ;;
-    7)
+    8)
       ask "Домены через запятую или пробел (напр. example.com,cdn.example.com): "
       read -r doms
       doms=$(echo "$doms" | tr ',;' '  ')
@@ -4535,13 +4551,16 @@ tg_ws_proxy_rs_conf_set() {
 }
 
 # Бэкапы конфига копятся с каждым подбором (по одному на прогон), поэтому
-# держим последние три — так же, как инсталлер поступает со своими.
+# держим последний — для экономии flash-памяти роутера.
 tg_ws_proxy_rs_prune_backups() {
-  local dir="$TG_WS_PROXY_RS_CONF_DIR" keep=3 old
+  local dir="$TG_WS_PROXY_RS_CONF_DIR" keep=1 old f
   [ -d "$dir" ] || return 0
   # shellcheck disable=SC2012 # имена однотипные: config.conf.bak.<дата>
   for old in $(ls -1 "$dir"/config.conf.bak.* 2>/dev/null | sort -r | tail -n +$((keep + 1))); do
     rm -f "$old"
+  done
+  for f in /tmp/tg-ws-proxy-backups/install-* /var/backups/tg-ws-proxy/install-* "$dir"/install-*; do
+    [ -e "$f" ] && rm -rf "$f"
   done
   return 0
 }
@@ -6353,16 +6372,22 @@ service_mirror_menu() {
   done
 }
 
+_opkg_status_path() {
+  local candidate
+  for candidate in /usr/lib/opkg/status /var/lib/opkg/status; do
+    if [ -f "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Починить базу OPKG status: NUL-байты и склеенные записи (из-за аварийного отключения питания) -> segfault opkg
 _opkg_repair_status() {
-  local st="${1:-}" bak tmp fixed n0 n1 nuls candidate
+  local st="${1:-}" bak tmp fixed n0 n1 nuls
   if [ -z "$st" ]; then
-    for candidate in /usr/lib/opkg/status /var/lib/opkg/status; do
-      if [ -f "$candidate" ]; then
-        st="$candidate"
-        break
-      fi
-    done
+    st=$(_opkg_status_path 2>/dev/null || true)
   fi
   [ -n "$st" ] && [ -f "$st" ] || {
     return 0
@@ -6411,13 +6436,8 @@ service_opkg_repair() {
     pause_press_enter
     return 0
   fi
-  local st="" candidate
-  for candidate in /usr/lib/opkg/status /var/lib/opkg/status; do
-    if [ -f "$candidate" ]; then
-      st="$candidate"
-      break
-    fi
-  done
+  local st
+  st=$(_opkg_status_path 2>/dev/null || true)
   if [ -z "$st" ]; then
     error "Файл базы opkg status не найден."
     pause_press_enter
@@ -6818,10 +6838,43 @@ read_choice() {
 # ---------------------------------------------------------------------------
 # Главное меню
 # ---------------------------------------------------------------------------
+# Выполнить пункт главного меню ($1 = 1..8|10..14|S|U|77|88|99).
+# return: 0 ок, 2 выход (0/00), 1 неизвестный пункт.
+run_menu_choice() {
+  local choice="$1"
+  case "$choice" in
+    1)  menu_install_nfqws || true ;;
+    2)  menu_strategy || true ;;
+    3)  update_ipset_list || true ;;
+    4)  update_rkn_list || true ;;
+    5)  menu_dot_doh || true ;;
+    6)  menu_change_fake_blob || true ;;
+    7)  menu_update_hosts || true ;;
+    8)  menu_dns_manage || true ;;
+    10) menu_dpi_detector || true ;;
+    11) menu_awg_openwrt || true ;;
+    12) menu_magitrickle || true ;;
+    # 15/16 — алиасы старой нумерации (совместимость)
+    13|15) menu_telemt || true ;;
+    14|16) menu_tg_ws_proxy_rs || true ;;
+    S|s) menu_service || true ;;
+    U|u) opkg_upgrade_all || true ;;
+    77) menu_change_language; return 0 ;;
+    88) menu_remove || true ;;
+    99) update_self || true ;;
+    00|0|"")
+      info "$LBL_00."
+      return 2
+      ;;
+    *) warn "${LBL_INVALID:-Invalid menu option}"; return 1 ;;
+  esac
+  return 0
+}
+
 main_menu() {
   ensure_single_instance
   upd_start
-  local os_tag="OpenWrt" choice
+  local os_tag="OpenWrt" choice rc
   [ "$ROUTER_OS" = "generic" ] && os_tag="Linux"
   while true; do
     clear 2>/dev/null || true
@@ -6866,32 +6919,10 @@ main_menu() {
     fi
 
     # || true — при set -e любой return 1 из пункта не должен завершать скрипт
-    case "$choice" in
-      1)  menu_install_nfqws || true ;;
-      2)  menu_strategy || true ;;
-      3)  update_ipset_list || true ;;
-      4)  update_rkn_list || true ;;
-      5)  menu_dot_doh || true ;;
-      6)  menu_change_fake_blob || true ;;
-      7)  menu_update_hosts || true ;;
-      8)  menu_dns_manage || true ;;
-      10) menu_dpi_detector || true ;;
-      11) menu_awg_openwrt || true ;;
-      12) menu_magitrickle || true ;;
-      # 15/16 — алиасы старой нумерации (совместимость)
-      13|15) menu_telemt || true ;;
-      14|16) menu_tg_ws_proxy_rs || true ;;
-      S|s) menu_service || true ;;
-      U|u) opkg_upgrade_all || true ;;
-      77) menu_change_language; continue ;;
-      88) menu_remove || true ;;
-      99) update_self || true ;;
-      00|0|"")
-        info "$LBL_00."
-        exit 0
-        ;;
-      *) warn "${LBL_INVALID:-Invalid menu option}" ;;
-    esac
+    run_menu_choice "$choice"
+    rc=$?
+    [ "$rc" = 2 ] && exit 0
+    [ "$choice" = "77" ] && continue
 
     # После внешних установщиков stdin часто «грязный» — чистим перед паузой
     drain_stdin
@@ -6939,6 +6970,62 @@ if [ ! -f "$SCRIPT_PATH" ]; then
 fi
 export SCRIPT_PATH
 
+# Алиасы CLI → код пункта меню (в нижнем регистре).
+# Пустой вывод = help; «-» = неизвестно.
+resolve_menu_arg() {
+  local a
+  a=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+  case "$a" in
+    -h|--help|help|h) printf '%s\n' "" ;;
+    1|nfqws|install) printf '%s\n' "1" ;;
+    2|strategy|strategies) printf '%s\n' "2" ;;
+    3|ipset) printf '%s\n' "3" ;;
+    4|rkn) printf '%s\n' "4" ;;
+    5|dot|doh|dotdoh) printf '%s\n' "5" ;;
+    6|blob|fake|fakeblob) printf '%s\n' "6" ;;
+    7|hosts) printf '%s\n' "7" ;;
+    8|dns) printf '%s\n' "8" ;;
+    10|dpi|dpi-detector|dpidetector) printf '%s\n' "10" ;;
+    11|awg|awgm|awg-openwrt) printf '%s\n' "11" ;;
+    12|magitrickle|magi) printf '%s\n' "12" ;;
+    13|15|telemt|telemt-panel) printf '%s\n' "13" ;;
+    14|16|tgws|tg-ws|tgwsrs|tg-ws-proxy|tg-ws-proxy-rs) printf '%s\n' "14" ;;
+    s|service) printf '%s\n' "S" ;;
+    u|upgrade|opkg-upgrade) printf '%s\n' "U" ;;
+    77|lang|language) printf '%s\n' "77" ;;
+    88|remove|uninstall) printf '%s\n' "88" ;;
+    99|self|update|self-update) printf '%s\n' "99" ;;
+    0|00|exit|quit) printf '%s\n' "0" ;;
+    *) printf '%s\n' "-" ;;
+  esac
+}
+
+menu_cli_help() {
+  echo "Usage: menu [item|alias]"
+  echo "  menu                 interactive menu"
+  echo "  menu help | menu -h  this help"
+  echo
+  echo "Items (number or alias):"
+  echo "  1  nfqws|install          install NFQWS/NFQWS2"
+  echo "  2  strategy               choose strategy"
+  echo "  3  ipset                  update IPSet list"
+  echo "  4  rkn                    load rkn.list"
+  echo "  5  dot|doh                DoT/DoH bypass"
+  echo "  6  blob|fake              change fake:blob"
+  echo "  7  hosts                  update hosts"
+  echo "  8  dns                    manage DoT/DoH"
+  echo "  10 dpi|dpi-detector       DPI detector"
+  echo "  11 awg|awg-openwrt        AmneziaWG manager"
+  echo "  12 magitrickle|magi       MagiTrickle"
+  echo "  13 telemt                 luci-app-telemt (MTProxy)"
+  echo "  14 tgws|tg-ws-proxy-rs    TG WS Proxy Rust"
+  echo "  S  service                service tools"
+  echo "  U  u|upgrade              upgrade packages"
+  echo "  77 lang                   interface language"
+  echo "  88 remove                 remove packages"
+  echo "  99 update|self            update this script"
+}
+
 ensure_menu_symlink() {
   local target link="/usr/bin/menu" cur
   target=$(menu_script_target)
@@ -6968,6 +7055,32 @@ fi
 if ! command -v opkg >/dev/null 2>&1 && ! command -v apk >/dev/null 2>&1; then
   error "Пакетный менеджер (opkg/apk) не найден."
   exit 1
+fi
+
+# Быстрый запуск пункта: menu 14 | menu tgws | menu u | menu S …
+if [ -n "${1:-}" ]; then
+  _arg=$(resolve_menu_arg "$1")
+  case "$_arg" in
+    "")
+      menu_cli_help
+      exit 0
+      ;;
+    -)
+      warn "Unknown item: $1"
+      echo "Try: menu help"
+      exit 1
+      ;;
+  esac
+  ensure_single_instance
+  echo
+  printf '%s\n' "${CYAN}${BOLD}NFQWS-MENU v${SCRIPT_VERSION}${NC} → $1 ($_arg)"
+  echo
+  detect_arch 2>/dev/null || true
+  run_menu_choice "$_arg"
+  rc=$?
+  [ "$rc" = 2 ] && exit 0
+  [ "$rc" = 1 ] && exit 1
+  exit 0
 fi
 
 main_menu

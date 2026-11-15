@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.2.0**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.2.1**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -376,6 +376,19 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ---
 
 ## Changelog
+
+### 0.2.1
+
+- **Синхронизация с `upstream/main` (`cd65307..b97fbcc`)**:
+  - Обновлена стратегия [`strategies/nfqws2/hardcorp74.conf`](strategies/nfqws2/hardcorp74.conf): актуальные правила обхода YouTube (`wide-youtube.l.google.com` fake clienthello с repeats=6), обновлены Ozon midhost и Discord.
+  - Исправлен порядок desync в [`strategies/dns_filter_nfqws1`](strategies/dns_filter_nfqws1) и `DOT_DOH_STRATEGY_NFQWS1` с `--dpi-desync=multisplit,fake` на валидный `--dpi-desync=fake,multisplit` для корректного порядка TCP-пакетов nfqws1.
+  - Добавлен пресет DoH для зон РФ (`Яндекс DoH (77.88.8.8) ➔ .ru / .su / .рф`) в меню привязки DNS (`owrt_bind_domain_menu`).
+  - Добавлен быстрый запуск пунктов меню и алиасов из CLI (`menu nfqws`, `menu strategy`, `menu ipset`, `menu dns`, `menu awg`, `menu tgws` и др.) и справка `menu -h` / `menu help`.
+- **Оптимизация, устранение багов и утечек**:
+  - Атомарная запись `ISP_INTERFACE` и `IPV6_ENABLED` в `nfqws-menu.sh` через `awk` + `mv -f` без `sed -i` с защитой от повреждения при сбоях питания.
+  - Дедуплицирован поиск базы пакетов OPKG (`_opkg_status_path`).
+  - Исправлены утечки глобальных переменных (15 `local` объявлений) в `strategies/lists/as.sh`.
+  - Устранена утечка flash-памяти роутера в `tg_ws_proxy_rs_prune_backups`: хранение только 1 последней копии и очистка архивов `install-*`.
 
 ### 0.2.0
 

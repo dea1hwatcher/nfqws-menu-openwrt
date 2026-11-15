@@ -14,10 +14,7 @@ PROV_IDX="/tmp/prov_index.$$.tmp"
 trap 'rm -f "$SUB_IDX" "$PROV_IDX" "${LISTS_DIR}"/*.tmp.$$ "${LISTS_DIR}"/*.new.$$ 2>/dev/null' EXIT INT TERM
 
 update_conf_status() {
-    mode="$1"
-    t_prov="${2:-}"
-    t_as="${3:-}"
-    new_val="${4:-}"
+    local mode="$1" t_prov="${2:-}" t_as="${3:-}" new_val="${4:-}" conf_tmp
     conf_tmp="${CONF_FILE}.tmp.$$"
     awk -v mode="$mode" -v tp="$t_prov" -v ta="$t_as" -v nv="$new_val" '
       /^#/ || /^[[:space:]]*$/ { print; next }
@@ -145,7 +142,7 @@ get_providers() {
 }
 
 menu_detail_as() {
-    target_prov="$1"
+    local target_prov="$1" i mark choice target as_name curr_st new_st prov status
 
     while true; do
         draw_header
@@ -201,6 +198,7 @@ menu_detail_as() {
 }
 
 menu_providers() {
+    local i p has_enabled has_disabled mark st_code choice target prov_name curr_st new_st prov as_name status
     while true; do
         draw_header
         echo " AS:"
@@ -278,6 +276,7 @@ menu_providers() {
 
 # Get ipset as list from z2k
 run_download_z2k() {
+    local output_file new_file ip_count _
     draw_header
     mkdir -p "$LISTS_DIR"
     output_file="${LISTS_DIR}/ipset_as.list"
@@ -304,6 +303,7 @@ run_download_z2k() {
 
 # Download all as
 run_download_all_as() {
+    local output_file temp_file new_file all_as_list as ip_count _
     draw_header
     mkdir -p "$LISTS_DIR"
     output_file="${LISTS_DIR}/ipset_as.list"
@@ -349,6 +349,7 @@ run_download_all_as() {
 
 # Download selected as
 run_download_providers() {
+    local active_providers prov output_file temp_file new_file as_list as ip_count _
     draw_header
     mkdir -p "$LISTS_DIR"
     echo " Download selected AS..."
