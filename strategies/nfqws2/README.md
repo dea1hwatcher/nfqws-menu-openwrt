@@ -4,7 +4,7 @@
 
 Подготовлены [@Nare51](https://github.com/Nare51) с использованием ИИ.
 
-В каталоге **22** стандартных `.conf` (+ отдельные кастомные конфиги сообщества: `MartinBacker`, `Uvvi2`, `alt4_mod`, `eduncey`, `hardcorp74`, `krushaaa` — они не входят в комплект Flowseal).
+В каталоге **22** стандартных `.conf` (+ 4 дополнительных порта `alt14`, `alt15`, `alt16`, `syndata` из [kinlay0/zapret2-discord-youtube-strats](https://github.com/kinlay0/zapret2-discord-youtube-strats) v1.1.5; + отдельные кастомные конфиги сообщества: `MartinBacker`, `Uvvi2`, `alt4_mod`, `eduncey`, `hardcorp74`, `krushaaa` — они не входят в комплект Flowseal).
 
 Формат соответствует службе nfqws2: `NFQWS_BASE_ARGS`, `NFQWS_ARGS`, `NFQWS_ARGS_QUIC`, `NFQWS_ARGS_UDP`, `MODE_LIST` / `MODE_ALL` / `MODE_AUTO`, `NFQWS_EXTRA_ARGS`, `NFQWS_ARGS_IPSET`, `NFQWS_ARGS_CUSTOM` и служебные настройки. Отдельный run.sh не нужен.
 
@@ -20,7 +20,7 @@
 - **`NFQWS_ARGS_IPSET` пустой** — общая HTTP(S)/QUIC-стратегия не копируется службой автоматически. Исходные IP-профили с собственными списками и методами вынесены в `NFQWS_ARGS_CUSTOM` (в т.ч. 8443, особенности ALT7/EXP).
 - Game Filter **выключен**. Полные игровые фрагменты — в `game-profiles/*.args` (не самостоятельные конфиги; при включении не ставить диапазон 1024–65535 в начало CUSTOM).
 
-Все 22 стратегии и цепочки ~195 профилей сохранены без смягчения repeats / split-pos / seqovl / cutoff / fooling / порядка fake и выбора blobs. Для Discord/game используются blobs из BAT 1.10.4, не произвольные alias.
+Все 26 стратегий (22 из Flowseal + 4 из kinlay0) и цепочки 231 профиля сохранены без смягчения repeats / split-pos / seqovl / cutoff / fooling / порядка fake и выбора blobs. Для Discord/game используются blobs из BAT 1.10.4, не произвольные alias.
 
 Особенности отдельных стратегий:
 
@@ -28,6 +28,8 @@
 - **ALT7** — отличающийся IP TCP-профиль `syndata`.
 - **EXP** — свой QUIC-профиль без ограничения порта, приоритет перед Discord UDP.
 - Для `multidisorder` в nfqws2 используется `multidisorder_legacy`.
+- **`alt14`/`alt15`/`alt16`/`syndata`** — порты из kinlay0 v1.1.5 (Windows/winws2). Их Lua-библиотеки побайтово совпадают с нашими, поэтому desync-цепочки перенесены без изменений; у `ip tls` (`80,443,8443`) отдельный 8443-профиль вынесен в `NFQWS_ARGS_CUSTOM`, а для `80/443` добавлены исключения пользовательских списков, чтобы не перехватывать доменные профили. Игровые профили лежат в `game-profiles/{alt14,alt15,alt16,syndata}.args` и **не включаются по умолчанию** (диапазон 1024–65535 ставится только после основных профилей).
+- В **`syndata`** включены `--ipcache-hostname=1` / `--ipcache-lifetime=7200`: техника работает на SYN-пакете, когда имя хоста ещё неизвестно. Без кэша адресов доменные списки для этого профиля не сработают. Как и в источнике, это не проверено на роутере.
 
 ## Таблица стратегий
 
@@ -47,6 +49,10 @@
 | general (ALT11).bat | `alt11.conf` | fake + multisplit seqovl=664 |
 | general (ALT12).bat | `alt12.conf` | ALT11 + hostfakesplit для google |
 | general (ALT13).bat | `alt13.conf` | fake + hostfakesplit (mail.ru), ts; Google hostfakesplit |
+| general (ALT14).bat | `alt14.conf` | kinlay0: sferum `seqovl=661`, discord.media repeats=8 |
+| general (ALT15).bat | `alt15.conf` | kinlay0: discord.media на google `seqovl=681`, repeats=6 |
+| general (ALT16).bat | `alt16.conf` | kinlay0: google `seqovl=681`, domain/IP tls на sferum |
+| general (SYNDATA).bat | `syndata.conf` | kinlay0: `syndata` + `http_domcase`/`http_hostcase`, нужен ipcache |
 | general (EXP).bat | `exp.conf` | fake + multisplit seqovl=480 (stun2) |
 | general (FAKE TLS AUTO).bat | `fake_tls_auto.conf` | fake + multidisorder 1,midsld |
 | general (FAKE TLS AUTO ALT).bat | `fake_tls_auto_alt.conf` | fake + fakedsplit pos=1 |

@@ -19,6 +19,9 @@
 
 ### Не выпущено
 
+- **strategies/nfqws2** — 4 новых порта из [kinlay0/zapret2-discord-youtube-strats](https://github.com/kinlay0/zapret2-discord-youtube-strats) v1.1.5: `alt14`, `alt15`, `alt16`, `syndata`. Lua-движок у источника идентичен нашему, desync-цепочки перенесены без изменений; имена блобов/списки и порты переведены в формат nfqws2, IP-профиль `80,443,8443` разделён (8443 вынесен в CUSTOM, для 80/443 добавлены исключения доменных списков). Игровые профили сохранены отдельно в `game-profiles/*.args` и по умолчанию выключены. `syndata` использует `--ipcache-hostname=1`/`--ipcache-lifetime=7200`; на роутере не тестировалось
+- **verification** — `profile-map.json` / `results.json` дополнены новыми конфигами (26 стратегий, 231 профиль); проверены синтаксис, раскрытие переменных, ссылки на blobs/lists и порядок desync-цепочек
+
 - **strategies/alt11** — профиль `discord.media` на TCP 2053/2083/2087/2096/8443: вместо google-шаблона (`seqovl=681`) применён рабочий sferum-метод (`seqovl=664`, `stun2` + `tls_clienthello_www_sferum_ru`) из [issue Flowseal #18993](https://github.com/Flowseal/zapret-discord-youtube/issues/18993); исправление портировано в nfqws1/nfqws2
 - **strategies/nfqws2** — пакет Flowseal **1.10.4** (NFQWS2 / Netcraze): обновлены standard-конфиги (alt…, simple_fake*, fake_tls_auto*, exp, **general**), blobs (в т.ч. `legacy_*`), lists, `strategies/lua/` (zapret-lib/antidpi/auto + flowseal-compat), game-profiles; кастомные conf (MartinBacker, Uvvi2, …) не тронуты. Подготовка [@Nare51](https://github.com/Nare51)
 - **п. 19 Antiscan** — `installer_antiscan.sh`: установка из opkg-репозитория [Antiscan](https://github.com/dimon27254/antiscan) (зеркало — по выбору), проверка компонента Netfilter, статус, start/stop/restart, настройка `ISP_INTERFACES` / `PORTS` / `PORTS_FORWARDED` с подсказкой WAN и бэкапом, `antiscan edit config`, списки блокировки, обновление и удаление

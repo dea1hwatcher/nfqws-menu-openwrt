@@ -999,6 +999,399 @@
     ]
   },
   {
+    "config": "alt14.conf",
+    "source": "general (ALT14).bat",
+    "main_source_index": 4,
+    "custom_roles": [
+      "source profile 3; Discord media",
+      "source profile 4; YouTube/Google",
+      "source profile 6; IP QUIC",
+      "source profile 7; IP TLS on 8443",
+      "source profile 7; IP TLS on 80/443, excludes main-list domains to retain priority"
+    ],
+    "source_profiles": 9,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-auto.lua",
+      "--blob=quic_initial_4pda_to:@/etc/nfqws2/blobs/quic_initial_4pda_to.bin",
+      "--blob=quic_initial_steamcommunity_com:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin",
+      "--blob=quic_initial_www_google_com:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=stun:@/etc/nfqws2/blobs/stun.bin",
+      "--blob=tls_clienthello_www_google_com:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=tls_clienthello_www_sferum_ru:@/etc/nfqws2/blobs/tls_clienthello_www_sferum_ru.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443",
+      "--filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+      "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+      "--payload=http_req",
+      "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000",
+      "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+      "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+    ],
+    "quic": [
+      "--filter-udp=443",
+      "--filter-l7=quic",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=11"
+    ],
+    "udp": [
+      "--filter-udp=19294-19344,50000-50100",
+      "--filter-l7=discord,stun",
+      "--payload=discord_ip_discovery,stun",
+      "--lua-desync=fake:blob=quic_initial_steamcommunity_com:repeats=6"
+    ],
+    "custom": [
+      [
+        "--filter-tcp=2053,2083,2087,2096,8443",
+        "--hostlist-domains=discord.media",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+      ],
+      [
+        "--filter-tcp=443",
+        "--hostlist=/etc/nfqws2/lists/google.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_google_com:repeats=8:tcp_ts=-600000:ip_id=zero",
+        "--lua-desync=multisplit:pos=2:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com:ip_id=zero"
+      ],
+      [
+        "--filter-udp=443",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=quic_initial",
+        "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=11"
+      ],
+      [
+        "--filter-tcp=8443",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+      ],
+      [
+        "--hostlist-exclude=/etc/nfqws2/lists/user.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/user-extra.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/rkn.list",
+        "--filter-tcp=80,443",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+      ]
+    ],
+    "games": [
+      [
+        "--filter-tcp=1024-65535",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--out-range=-n4",
+        "--payload=tls_client_hello,unknown",
+        "--lua-desync=fake:blob=stun:repeats=8:tcp_ts=-600000:payload=tls_client_hello,unknown",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000:payload=tls_client_hello,unknown",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru:payload=tls_client_hello,unknown",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+      ],
+      [
+        "--filter-udp=1024-65535",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--out-range=-n4",
+        "--payload=all",
+        "--lua-desync=fake:blob=quic_initial_4pda_to:repeats=10:payload=all"
+      ]
+    ]
+  },
+  {
+    "config": "alt15.conf",
+    "source": "general (ALT15).bat",
+    "main_source_index": 4,
+    "custom_roles": [
+      "source profile 3; Discord media",
+      "source profile 4; YouTube/Google",
+      "source profile 6; IP QUIC",
+      "source profile 7; IP TLS on 8443",
+      "source profile 7; IP TLS on 80/443, excludes main-list domains to retain priority"
+    ],
+    "source_profiles": 9,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-auto.lua",
+      "--blob=quic_initial_4pda_to:@/etc/nfqws2/blobs/quic_initial_4pda_to.bin",
+      "--blob=quic_initial_steamcommunity_com:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin",
+      "--blob=quic_initial_www_google_com:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=stun:@/etc/nfqws2/blobs/stun.bin",
+      "--blob=tls_clienthello_www_google_com:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=tls_clienthello_www_sferum_ru:@/etc/nfqws2/blobs/tls_clienthello_www_sferum_ru.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443",
+      "--filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+      "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+      "--payload=http_req",
+      "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000",
+      "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+      "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+    ],
+    "quic": [
+      "--filter-udp=443",
+      "--filter-l7=quic",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=11"
+    ],
+    "udp": [
+      "--filter-udp=19294-19344,50000-50100",
+      "--filter-l7=discord,stun",
+      "--payload=discord_ip_discovery,stun",
+      "--lua-desync=fake:blob=quic_initial_steamcommunity_com:repeats=6"
+    ],
+    "custom": [
+      [
+        "--filter-tcp=2053,2083,2087,2096,8443",
+        "--hostlist-domains=discord.media",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com"
+      ],
+      [
+        "--filter-tcp=443",
+        "--hostlist=/etc/nfqws2/lists/google.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_google_com:repeats=8:tcp_ts=-600000:ip_id=zero",
+        "--lua-desync=multisplit:pos=2:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com:ip_id=zero"
+      ],
+      [
+        "--filter-udp=443",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=quic_initial",
+        "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=11"
+      ],
+      [
+        "--filter-tcp=8443",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+      ],
+      [
+        "--hostlist-exclude=/etc/nfqws2/lists/user.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/user-extra.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/rkn.list",
+        "--filter-tcp=80,443",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+      ]
+    ],
+    "games": [
+      [
+        "--filter-tcp=1024-65535",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--out-range=-n4",
+        "--payload=tls_client_hello,unknown",
+        "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000:payload=tls_client_hello,unknown",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000:payload=tls_client_hello,unknown",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru:payload=tls_client_hello,unknown",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+      ],
+      [
+        "--filter-udp=1024-65535",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--out-range=-n2",
+        "--payload=all",
+        "--lua-desync=fake:blob=quic_initial_4pda_to:repeats=12:payload=all"
+      ]
+    ]
+  },
+  {
+    "config": "alt16.conf",
+    "source": "general (ALT16).bat",
+    "main_source_index": 4,
+    "custom_roles": [
+      "source profile 3; Discord media",
+      "source profile 4; YouTube/Google",
+      "source profile 6; IP QUIC",
+      "source profile 7; IP TLS on 8443",
+      "source profile 7; IP TLS on 80/443, excludes main-list domains to retain priority"
+    ],
+    "source_profiles": 9,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-auto.lua",
+      "--blob=quic_initial_4pda_to:@/etc/nfqws2/blobs/quic_initial_4pda_to.bin",
+      "--blob=quic_initial_steamcommunity_com:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin",
+      "--blob=quic_initial_www_google_com:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=stun:@/etc/nfqws2/blobs/stun.bin",
+      "--blob=tls_clienthello_www_google_com:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=tls_clienthello_www_sferum_ru:@/etc/nfqws2/blobs/tls_clienthello_www_sferum_ru.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443",
+      "--filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000",
+      "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+      "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+      "--payload=http_req",
+      "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+      "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+    ],
+    "quic": [
+      "--filter-udp=443",
+      "--filter-l7=quic",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=11"
+    ],
+    "udp": [
+      "--filter-udp=19294-19344,50000-50100",
+      "--filter-l7=discord,stun",
+      "--payload=discord_ip_discovery,stun",
+      "--lua-desync=fake:blob=quic_initial_steamcommunity_com:repeats=6"
+    ],
+    "custom": [
+      [
+        "--filter-tcp=2053,2083,2087,2096,8443",
+        "--hostlist-domains=discord.media",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com"
+      ],
+      [
+        "--filter-tcp=443",
+        "--hostlist=/etc/nfqws2/lists/google.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-600000:ip_id=zero",
+        "--lua-desync=multisplit:pos=2:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com:ip_id=zero"
+      ],
+      [
+        "--filter-udp=443",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=quic_initial",
+        "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=6"
+      ],
+      [
+        "--filter-tcp=8443",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+      ],
+      [
+        "--hostlist-exclude=/etc/nfqws2/lists/user.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/user-extra.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/rkn.list",
+        "--filter-tcp=80,443",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+      ]
+    ],
+    "games": [
+      [
+        "--filter-tcp=1024-65535",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--out-range=-n4",
+        "--payload=tls_client_hello,unknown",
+        "--lua-desync=fake:blob=stun:repeats=6:tcp_ts=-600000:payload=tls_client_hello,unknown",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000:payload=tls_client_hello,unknown",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru:payload=tls_client_hello,unknown",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru"
+      ],
+      [
+        "--filter-udp=1024-65535",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--out-range=-n4",
+        "--payload=all",
+        "--lua-desync=fake:blob=quic_initial_4pda_to:repeats=6:payload=all"
+      ]
+    ]
+  },
+  {
     "config": "alt2.conf",
     "source": "general (ALT2).bat",
     "main_source_index": 4,
@@ -3414,6 +3807,176 @@
     ]
   },
   {
+    "config": "general.conf",
+    "source": "general.bat",
+    "main_source_index": 4,
+    "custom_roles": [
+      "source profile 3; Discord media",
+      "source profile 4; Google",
+      "sample DNS",
+      "sample DNS",
+      "sample DNS",
+      "source IP QUIC",
+      "source IP TCP on 8443",
+      "source IP TCP on 80/443, excludes main-list domains to retain priority"
+    ],
+    "source_profiles": 9,
+    "main": [
+      "--filter-tcp=80,443",
+      "--filter-l7=http,tls",
+      "--payload=known",
+      "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to"
+    ],
+    "quic": [
+      "--filter-udp=443",
+      "--filter-l7=quic",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=6",
+      "--payload=discord_ip_discovery",
+      "--lua-desync=fake:blob=legacy_zero64:repeats=6",
+      "--payload=stun",
+      "--lua-desync=fake:blob=legacy_zero64:repeats=6",
+      "--payload=wireguard_initiation",
+      "--lua-desync=fake:blob=legacy_zero64:repeats=6",
+      "--payload=dht",
+      "--lua-desync=fake:blob=legacy_zero64:repeats=6"
+    ],
+    "udp": [
+      "--filter-udp=19294-19344,50000-50100",
+      "--filter-l7=discord,stun",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=legacy_quic:repeats=6",
+      "--payload=discord_ip_discovery",
+      "--lua-desync=fake:blob=quic_initial_steamcommunity_com:repeats=6",
+      "--payload=stun",
+      "--lua-desync=fake:blob=quic_initial_steamcommunity_com:repeats=6",
+      "--payload=wireguard_initiation",
+      "--lua-desync=fake:blob=legacy_zero64:repeats=6",
+      "--payload=dht",
+      "--lua-desync=fake:blob=legacy_zero64:repeats=6"
+    ],
+    "custom": [
+      [
+        "--filter-tcp=2053,2083,2087,2096,8443",
+        "--hostlist-domains=discord.media",
+        "--payload=known",
+        "--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com"
+      ],
+      [
+        "--filter-tcp=443",
+        "--hostlist=/opt/etc/nfqws2/lists/google.list",
+        "--payload=known",
+        "--lua-desync=multisplit:ip_id=zero:pos=1:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com"
+      ],
+      [
+        "--filter-tcp=443,853",
+        "--filter-l7=http,tls",
+        "--hostlist-domains=dns.iij.jp,dot.sb,dns.sb,doh.sb,dns.google,dot.pub,doh.pub,controld.com,opendns.com,anycast.censurfridns.dk,dns.alidns.com,libredns.gr,cloudflare-dns.com,one.one.one.one,opennameserver.org,cleanbrowsing.org,dns.adguard-dns.com,dns.comss.one,xbox-dns.ru,dns.malw.link,geohide.ru,dns.nextdns.io,dns10.quad9.net",
+        "--out-range=-d10",
+        "--payload=tls_client_hello,http_req",
+        "--lua-desync=multisplit:pos=1,host+2,midsld+2,endsld-2:seqovl=4:tcp_ts_up",
+        "--lua-desync=fake:blob=tls_clienthello:tcp_md5:tcp_seq=10000:tls_mod=rnd,dupsid,sni=ozon.ru:repeats=3"
+      ],
+      [
+        "--filter-tcp=443,853",
+        "--filter-l7=http,tls",
+        "--ipset-ip=104.16.248.249,104.16.249.249,91.239.100.100,89.233.43.71,8.8.8.8,8.8.4.4,1.12.12.12,120.53.53.53,208.67.222.222,208.67.220.220,223.5.5.5,223.6.6.6,116.202.176.26,1.1.1.1,1.0.0.1,1.1.1.2,1.0.0.2,1.1.1.3,1.0.0.3,217.160.70.42,213.202.211.221,81.169.136.222,185.181.61.24,185.228.168.9,185.228.169.9,94.140.14.14,94.140.15.15,94.140.14.140,94.140.14.141,94.140.14.15,94.140.15.16,45.90.28.94,45.90.30.94,76.76.2.11,76.76.10.11,9.9.9.9,9.9.9.10,149.112.112.112,185.222.222.222,45.11.45.11,172.104.93.80",
+        "--out-range=-d10",
+        "--payload=tls_client_hello,http_req",
+        "--lua-desync=multisplit:pos=1,27:seqovl=4:tcp_ts_up",
+        "--lua-desync=fake:blob=tls_clienthello:tcp_md5:tcp_seq=10000:tls_mod=rnd,dupsid,sni=ozon.ru:repeats=3"
+      ],
+      [
+        "--filter-udp=443,853",
+        "--filter-l7=quic",
+        "--hostlist-domains=cloudflare-dns.com,dns.adguard-dns.com,dns.nextdns.io,nextdns.io,dns.google,controld.com",
+        "--payload=quic_initial",
+        "--lua-desync=send:ipfrag:ipfrag_pos_udp=88"
+      ],
+      [
+        "--filter-udp=443",
+        "--ipset=/opt/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=quic_initial",
+        "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=6",
+        "--payload=discord_ip_discovery",
+        "--lua-desync=fake:blob=legacy_zero64:repeats=6",
+        "--payload=stun",
+        "--lua-desync=fake:blob=legacy_zero64:repeats=6",
+        "--payload=wireguard_initiation",
+        "--lua-desync=fake:blob=legacy_zero64:repeats=6",
+        "--payload=dht",
+        "--lua-desync=fake:blob=legacy_zero64:repeats=6"
+      ],
+      [
+        "--filter-tcp=8443",
+        "--ipset=/opt/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=known",
+        "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to"
+      ],
+      [
+        "--hostlist-exclude=/opt/etc/nfqws2/lists/user.list",
+        "--hostlist-exclude=/opt/etc/nfqws2/lists/user-extra.list",
+        "--hostlist-exclude=/opt/etc/nfqws2/lists/rkn.list",
+        "--filter-tcp=80,443",
+        "--ipset=/opt/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=known",
+        "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to"
+      ]
+    ],
+    "games": [
+      "--filter-tcp=1024-65535",
+      "--ipset=/opt/etc/nfqws2/lists/ipset.list",
+      "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
+      "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude-extra.list",
+      "--out-range=<n3",
+      "--payload=known,unknown",
+      "--lua-desync=multisplit:payload=~empty:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to",
+      "--new",
+      "--filter-udp=1024-65535",
+      "--ipset=/opt/etc/nfqws2/lists/ipset.list",
+      "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
+      "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude-extra.list",
+      "--out-range=<n2",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=legacy_quic:repeats=12",
+      "--payload=discord_ip_discovery",
+      "--lua-desync=fake:blob=legacy_zero64:repeats=12",
+      "--payload=stun",
+      "--lua-desync=fake:blob=legacy_zero64:repeats=12",
+      "--payload=wireguard_initiation",
+      "--lua-desync=fake:blob=legacy_zero64:repeats=12",
+      "--payload=dht",
+      "--lua-desync=fake:blob=legacy_zero64:repeats=12",
+      "--payload=unknown",
+      "--lua-desync=fake:blob=quic_initial_4pda_to:repeats=12:payload=~empty"
+    ],
+    "base": [
+      "--lua-init=@/opt/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/opt/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/opt/etc/nfqws2/lua/zapret-auto.lua",
+      "--blob=quic_initial_steamcommunity_com:@/opt/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin",
+      "--blob=quic_initial_4pda_to:@/opt/etc/nfqws2/blobs/quic_initial_4pda_to.bin",
+      "--blob=legacy_quic:@/opt/etc/nfqws2/blobs/legacy_quic.bin",
+      "--blob=legacy_zero64:@/opt/etc/nfqws2/blobs/legacy_zero64.bin",
+      "--blob=quic_initial_www_google_com:@/opt/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=tls_clienthello:@/opt/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=tls_clienthello_4pda_to:@/opt/etc/nfqws2/blobs/tls_clienthello_4pda_to.bin",
+      "--blob=tls_clienthello_www_google_com:@/opt/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin"
+    ]
+  },
+  {
     "config": "simple-fake-alt.conf",
     "source": "general (SIMPLE FAKE ALT).bat",
     "main_source_index": 4,
@@ -3981,173 +4544,139 @@
     ]
   },
   {
-    "config": "general.conf",
-    "source": "general.bat",
+    "config": "syndata.conf",
+    "source": "general (SYNDATA).bat",
     "main_source_index": 4,
     "custom_roles": [
       "source profile 3; Discord media",
-      "source profile 4; Google",
-      "sample DNS",
-      "sample DNS",
-      "sample DNS",
-      "source IP QUIC",
-      "source IP TCP on 8443",
-      "source IP TCP on 80/443, excludes main-list domains to retain priority"
+      "source profile 4; YouTube/Google",
+      "source profile 6; IP QUIC",
+      "source profile 7; IP TLS on 8443",
+      "source profile 7; IP TLS on 80/443, excludes main-list domains to retain priority"
     ],
     "source_profiles": 9,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-auto.lua",
+      "--blob=quic_initial_4pda_to:@/etc/nfqws2/blobs/quic_initial_4pda_to.bin",
+      "--blob=quic_initial_steamcommunity_com:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin",
+      "--blob=quic_initial_www_google_com:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=tls_clienthello_5ka_ru:@/etc/nfqws2/blobs/tls_clienthello_5ka_ru.bin",
+      "--blob=tls_clienthello_www_google_com:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=tls_clienthello_www_sferum_ru:@/etc/nfqws2/blobs/tls_clienthello_www_sferum_ru.bin",
+      "--ipcache-hostname=1",
+      "--ipcache-lifetime=7200"
+    ],
     "main": [
       "--filter-tcp=80,443",
       "--filter-l7=http,tls",
-      "--payload=known",
-      "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to"
+      "--lua-desync=syndata:blob=tls_clienthello_5ka_ru:tls_mod=rnd",
+      "--payload=tls_client_hello",
+      "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+      "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+      "--payload=http_req",
+      "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+      "--lua-desync=http_domcase",
+      "--lua-desync=http_hostcase:spell=hoSt",
+      "--lua-desync=multisplit:pos=method+2,host+1"
     ],
     "quic": [
       "--filter-udp=443",
       "--filter-l7=quic",
       "--payload=quic_initial",
-      "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=6",
-      "--payload=discord_ip_discovery",
-      "--lua-desync=fake:blob=legacy_zero64:repeats=6",
-      "--payload=stun",
-      "--lua-desync=fake:blob=legacy_zero64:repeats=6",
-      "--payload=wireguard_initiation",
-      "--lua-desync=fake:blob=legacy_zero64:repeats=6",
-      "--payload=dht",
-      "--lua-desync=fake:blob=legacy_zero64:repeats=6"
+      "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=11"
     ],
     "udp": [
       "--filter-udp=19294-19344,50000-50100",
       "--filter-l7=discord,stun",
-      "--payload=quic_initial",
-      "--lua-desync=fake:blob=legacy_quic:repeats=6",
-      "--payload=discord_ip_discovery",
-      "--lua-desync=fake:blob=quic_initial_steamcommunity_com:repeats=6",
-      "--payload=stun",
-      "--lua-desync=fake:blob=quic_initial_steamcommunity_com:repeats=6",
-      "--payload=wireguard_initiation",
-      "--lua-desync=fake:blob=legacy_zero64:repeats=6",
-      "--payload=dht",
-      "--lua-desync=fake:blob=legacy_zero64:repeats=6"
+      "--payload=discord_ip_discovery,stun",
+      "--lua-desync=fake:blob=quic_initial_steamcommunity_com:repeats=6"
     ],
     "custom": [
       [
         "--filter-tcp=2053,2083,2087,2096,8443",
         "--hostlist-domains=discord.media",
-        "--payload=known",
-        "--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com"
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_google_com:repeats=6:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com"
       ],
       [
         "--filter-tcp=443",
-        "--hostlist=/opt/etc/nfqws2/lists/google.list",
-        "--payload=known",
-        "--lua-desync=multisplit:ip_id=zero:pos=1:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com"
-      ],
-      [
-        "--filter-tcp=443,853",
-        "--filter-l7=http,tls",
-        "--hostlist-domains=dns.iij.jp,dot.sb,dns.sb,doh.sb,dns.google,dot.pub,doh.pub,controld.com,opendns.com,anycast.censurfridns.dk,dns.alidns.com,libredns.gr,cloudflare-dns.com,one.one.one.one,opennameserver.org,cleanbrowsing.org,dns.adguard-dns.com,dns.comss.one,xbox-dns.ru,dns.malw.link,geohide.ru,dns.nextdns.io,dns10.quad9.net",
-        "--out-range=-d10",
-        "--payload=tls_client_hello,http_req",
-        "--lua-desync=multisplit:pos=1,host+2,midsld+2,endsld-2:seqovl=4:tcp_ts_up",
-        "--lua-desync=fake:blob=tls_clienthello:tcp_md5:tcp_seq=10000:tls_mod=rnd,dupsid,sni=ozon.ru:repeats=3"
-      ],
-      [
-        "--filter-tcp=443,853",
-        "--filter-l7=http,tls",
-        "--ipset-ip=104.16.248.249,104.16.249.249,91.239.100.100,89.233.43.71,8.8.8.8,8.8.4.4,1.12.12.12,120.53.53.53,208.67.222.222,208.67.220.220,223.5.5.5,223.6.6.6,116.202.176.26,1.1.1.1,1.0.0.1,1.1.1.2,1.0.0.2,1.1.1.3,1.0.0.3,217.160.70.42,213.202.211.221,81.169.136.222,185.181.61.24,185.228.168.9,185.228.169.9,94.140.14.14,94.140.15.15,94.140.14.140,94.140.14.141,94.140.14.15,94.140.15.16,45.90.28.94,45.90.30.94,76.76.2.11,76.76.10.11,9.9.9.9,9.9.9.10,149.112.112.112,185.222.222.222,45.11.45.11,172.104.93.80",
-        "--out-range=-d10",
-        "--payload=tls_client_hello,http_req",
-        "--lua-desync=multisplit:pos=1,27:seqovl=4:tcp_ts_up",
-        "--lua-desync=fake:blob=tls_clienthello:tcp_md5:tcp_seq=10000:tls_mod=rnd,dupsid,sni=ozon.ru:repeats=3"
-      ],
-      [
-        "--filter-udp=443,853",
-        "--filter-l7=quic",
-        "--hostlist-domains=cloudflare-dns.com,dns.adguard-dns.com,dns.nextdns.io,nextdns.io,dns.google,controld.com",
-        "--payload=quic_initial",
-        "--lua-desync=send:ipfrag:ipfrag_pos_udp=88"
+        "--hostlist=/etc/nfqws2/lists/google.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_google_com:repeats=8:tcp_ts=-600000:ip_id=zero",
+        "--lua-desync=multisplit:pos=2:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com:ip_id=zero"
       ],
       [
         "--filter-udp=443",
-        "--ipset=/opt/etc/nfqws2/lists/ipset.list",
-        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
-        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude-extra.list",
-        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
-        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
         "--payload=quic_initial",
-        "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=6",
-        "--payload=discord_ip_discovery",
-        "--lua-desync=fake:blob=legacy_zero64:repeats=6",
-        "--payload=stun",
-        "--lua-desync=fake:blob=legacy_zero64:repeats=6",
-        "--payload=wireguard_initiation",
-        "--lua-desync=fake:blob=legacy_zero64:repeats=6",
-        "--payload=dht",
-        "--lua-desync=fake:blob=legacy_zero64:repeats=6"
+        "--lua-desync=fake:blob=quic_initial_www_google_com:repeats=11"
       ],
       [
         "--filter-tcp=8443",
-        "--ipset=/opt/etc/nfqws2/lists/ipset.list",
-        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
-        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude-extra.list",
-        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
-        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude-extra.list",
-        "--payload=known",
-        "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to"
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=http_domcase",
+        "--lua-desync=http_hostcase:spell=host",
+        "--lua-desync=multisplit:pos=method+2,host+1"
       ],
       [
-        "--hostlist-exclude=/opt/etc/nfqws2/lists/user.list",
-        "--hostlist-exclude=/opt/etc/nfqws2/lists/user-extra.list",
-        "--hostlist-exclude=/opt/etc/nfqws2/lists/rkn.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/user.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/user-extra.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/rkn.list",
         "--filter-tcp=80,443",
-        "--ipset=/opt/etc/nfqws2/lists/ipset.list",
-        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude.list",
-        "--hostlist-exclude=/opt/etc/nfqws2/lists/exclude-extra.list",
-        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
-        "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude-extra.list",
-        "--payload=known",
-        "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to"
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude.list",
+        "--hostlist-exclude=/etc/nfqws2/lists/exclude-extra.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=http_domcase",
+        "--lua-desync=http_hostcase:spell=host",
+        "--lua-desync=multisplit:pos=method+2,host+1"
       ]
     ],
     "games": [
-      "--filter-tcp=1024-65535",
-      "--ipset=/opt/etc/nfqws2/lists/ipset.list",
-      "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
-      "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude-extra.list",
-      "--out-range=<n3",
-      "--payload=known,unknown",
-      "--lua-desync=multisplit:payload=~empty:pos=1:seqovl=568:seqovl_pattern=tls_clienthello_4pda_to",
-      "--new",
-      "--filter-udp=1024-65535",
-      "--ipset=/opt/etc/nfqws2/lists/ipset.list",
-      "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude.list",
-      "--ipset-exclude=/opt/etc/nfqws2/lists/ipset_exclude-extra.list",
-      "--out-range=<n2",
-      "--payload=quic_initial",
-      "--lua-desync=fake:blob=legacy_quic:repeats=12",
-      "--payload=discord_ip_discovery",
-      "--lua-desync=fake:blob=legacy_zero64:repeats=12",
-      "--payload=stun",
-      "--lua-desync=fake:blob=legacy_zero64:repeats=12",
-      "--payload=wireguard_initiation",
-      "--lua-desync=fake:blob=legacy_zero64:repeats=12",
-      "--payload=dht",
-      "--lua-desync=fake:blob=legacy_zero64:repeats=12",
-      "--payload=unknown",
-      "--lua-desync=fake:blob=quic_initial_4pda_to:repeats=12:payload=~empty"
-    ],
-    "base": [
-      "--lua-init=@/opt/etc/nfqws2/lua/zapret-lib.lua",
-      "--lua-init=@/opt/etc/nfqws2/lua/zapret-antidpi.lua",
-      "--lua-init=@/opt/etc/nfqws2/lua/zapret-auto.lua",
-      "--blob=quic_initial_steamcommunity_com:@/opt/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin",
-      "--blob=quic_initial_4pda_to:@/opt/etc/nfqws2/blobs/quic_initial_4pda_to.bin",
-      "--blob=legacy_quic:@/opt/etc/nfqws2/blobs/legacy_quic.bin",
-      "--blob=legacy_zero64:@/opt/etc/nfqws2/blobs/legacy_zero64.bin",
-      "--blob=quic_initial_www_google_com:@/opt/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
-      "--blob=tls_clienthello:@/opt/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
-      "--blob=tls_clienthello_4pda_to:@/opt/etc/nfqws2/blobs/tls_clienthello_4pda_to.bin",
-      "--blob=tls_clienthello_www_google_com:@/opt/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin"
+      [
+        "--filter-tcp=1024-65535",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--out-range=-n4",
+        "--payload=tls_client_hello,unknown",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000:payload=tls_client_hello,unknown",
+        "--lua-desync=multisplit:pos=2:seqovl=661:seqovl_pattern=tls_clienthello_www_sferum_ru",
+        "--payload=http_req",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000",
+        "--lua-desync=multisplit:pos=method+2,host+1"
+      ],
+      [
+        "--filter-udp=1024-65535",
+        "--ipset=/etc/nfqws2/lists/ipset.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list",
+        "--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list",
+        "--out-range=-n3",
+        "--payload=all",
+        "--lua-desync=fake:blob=quic_initial_4pda_to:repeats=10:payload=all"
+      ]
     ]
   }
 ]
