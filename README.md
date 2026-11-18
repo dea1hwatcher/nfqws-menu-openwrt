@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.2.3**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.2.4**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -376,6 +376,12 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ---
 
 ## Changelog
+
+### 0.2.4
+
+- **Стратегии nfqws2-android** — подтянуты 8 конфигов из [`dea1hwatcher/nfqws2-android`](https://github.com/dea1hwatcher/nfqws2-android) (`anti_throttle`, `fake_disorder`, `nzapret`, `rostelecom`, `universal_v12`, `universal_v13`, `z2r_rocket`, `z_attacker`); `smart` и `tr_*` исключены. Всего в репозитории **63 стратегии / 532 профиля**.
+- **Зависимости** — добавлены `zapret-custom.lua` / `custom_funcs.lua` в `strategies/lua/` и `ipset_warp.list` / `ipset_twitter.list` в `strategies/lists/`. `ACTIVE_DISCORD_UDP.bin` и `discord_udp.bin` заменены на побайтово идентичный `quic_initial_steamcommunity_com.bin`.
+- **Адаптация** — пути `$LUA_DIR` / `$BLOBS_DIR` / `$LISTS_DIR` / `$LOG_DIR` переведены в `/etc/nfqws2/...` и `/opt/var/log`, Android-настройки сервиса убраны. Кастомный Lua и `ip_autottl` не тестировались на роутере.
 
 ### 0.2.3
 

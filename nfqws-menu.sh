@@ -12,7 +12,7 @@
 set -e
 trap '' USR1 2>/dev/null || true
 
-SCRIPT_VERSION="0.2.3"
+SCRIPT_VERSION="0.2.4"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
