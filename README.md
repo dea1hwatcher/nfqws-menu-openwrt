@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.2.1**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.2.2**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -376,6 +376,16 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ---
 
 ## Changelog
+
+### 0.2.2
+
+- **Синхронизация с `upstream/main` (`f1e3354..5c66c97`)**:
+  - В [`strategies/lists/user.list`](strategies/lists/user.list) добавлены домены `www.coursera.org`, `www.linuxserver.io`, `project-athens.com`.
+  - Обновлён [`SHA256SUMS`](SHA256SUMS) под новое содержимое списка.
+  - Файл `user.list` приведён к LF согласно `.gitattributes` (в апстриме он пришёл с CRLF).
+- **Исправления стратегий**:
+  - В [`strategies/nfqws2/README.md`](strategies/nfqws2/README.md) убраны оставшиеся маркеры конфликта от прошлого merge; сохранены оба варианта инструкций (OpenWrt `/etc/...` и Keenetic/Entware `/opt/etc/...`).
+  - В `ALT11` ([`strategies/nfqws1/alt11.conf`](strategies/nfqws1/alt11.conf), [`strategies/nfqws2/alt11.conf`](strategies/nfqws2/alt11.conf)) профиль `discord.media` на TCP 2053/2083/2087/2096/8443 переведён с google-шаблона (`seqovl=681`) на рабочий sferum-метод (`seqovl=664`, `stun2` + `tls_clienthello_www_sferum_ru`) — голос Discord перестаёт зависать на «Подключении» ([issue Flowseal #18993](https://github.com/Flowseal/zapret-discord-youtube/issues/18993)). Обновлены `strategies/verification/profile-map.json` и `results.json`.
 
 ### 0.2.1
 
