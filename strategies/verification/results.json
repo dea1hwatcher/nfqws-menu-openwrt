@@ -194,15 +194,6 @@
       "effective_active_profiles": 11
     },
     {
-      "config": "general.conf",
-      "shell_syntax": "PASS",
-      "shell_expansion": "PASS",
-      "service_settings": "PASS",
-      "blob_and_list_references": "PASS",
-      "source_strategy_sequences": "PASS",
-      "effective_active_profiles": 11
-    },
-    {
       "config": "simple-fake-alt.conf",
       "shell_syntax": "PASS",
       "shell_expansion": "PASS",
@@ -238,6 +229,15 @@
       "source_strategy_sequences": "PASS",
       "effective_active_profiles": 8,
       "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args; требует --ipcache-hostname (SYN до известного имени хоста)"
+    },
+    {
+      "config": "general.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 11
     }
   ],
   "lua_syntax": "PASS: LuaJIT 2.1 compilation of four files",
