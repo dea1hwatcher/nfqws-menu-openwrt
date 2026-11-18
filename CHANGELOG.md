@@ -19,6 +19,7 @@
 
 ### Не выпущено
 
+- **strategies/alt11** — профиль `discord.media` на TCP 2053/2083/2087/2096/8443: вместо google-шаблона (`seqovl=681`) применён рабочий sferum-метод (`seqovl=664`, `stun2` + `tls_clienthello_www_sferum_ru`) из [issue Flowseal #18993](https://github.com/Flowseal/zapret-discord-youtube/issues/18993); исправление портировано в nfqws1/nfqws2
 - **strategies/nfqws2** — пакет Flowseal **1.10.4** (NFQWS2 / Netcraze): обновлены standard-конфиги (alt…, simple_fake*, fake_tls_auto*, exp, **general**), blobs (в т.ч. `legacy_*`), lists, `strategies/lua/` (zapret-lib/antidpi/auto + flowseal-compat), game-profiles; кастомные conf (MartinBacker, Uvvi2, …) не тронуты. Подготовка [@Nare51](https://github.com/Nare51)
 - **п. 19 Antiscan** — `installer_antiscan.sh`: установка из opkg-репозитория [Antiscan](https://github.com/dimon27254/antiscan) (зеркало — по выбору), проверка компонента Netfilter, статус, start/stop/restart, настройка `ISP_INTERFACES` / `PORTS` / `PORTS_FORWARDED` с подсказкой WAN и бэкапом, `antiscan edit config`, списки блокировки, обновление и удаление
 - **show_installed** — строка `antiscan` (⚡ по `/tmp/ascn.run`), `S99ascn` не дублируется в «прочие init.d»

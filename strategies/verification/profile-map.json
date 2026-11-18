@@ -399,7 +399,7 @@
     "source": "general (ALT11).bat",
     "main_source_index": 4,
     "custom_roles": [
-      "source profile 3; Discord media",
+      "source profile 3; Discord media (issue #18993 sferum fix)",
       "source profile 4; Google",
       "sample DNS",
       "sample DNS",
@@ -455,9 +455,10 @@
         "--payload=http_req",
         "--lua-desync=fake:blob=legacy_default_http:repeats=8:tcp_ts=-600000:tcp_ts_up",
         "--payload=tls_client_hello",
-        "--lua-desync=fake:blob=tls_clienthello_www_google_com:repeats=8:tcp_ts=-600000:tcp_ts_up",
+        "--lua-desync=fake:blob=stun2:repeats=8:tcp_ts=-600000:tcp_ts_up",
+        "--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=8:tcp_ts=-600000:tcp_ts_up",
         "--payload=known",
-        "--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_clienthello_www_google_com"
+        "--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_clienthello_www_sferum_ru"
       ],
       [
         "--filter-tcp=443",

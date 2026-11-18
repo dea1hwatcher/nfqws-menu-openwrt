@@ -25,7 +25,8 @@
       "service_settings": "PASS",
       "blob_and_list_references": "PASS",
       "source_strategy_sequences": "PASS",
-      "effective_active_profiles": 11
+      "effective_active_profiles": 11,
+      "note": "ALT11 Discord media profile patched per Flowseal issue #18993 (intentional divergence from source .bat)"
     },
     {
       "config": "alt12.conf",
