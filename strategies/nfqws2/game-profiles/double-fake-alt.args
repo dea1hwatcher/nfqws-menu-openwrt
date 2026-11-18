@@ -1,0 +1,23 @@
+# Game Filter из general (DOUBLE FAKE ALT).bat -> NFQWS2
+# Не самостоятельный конфиг. Вставлять ПОСЛЕ основных профилей в
+# NFQWS_ARGS_CUSTOM и расширять TCP_PORTS / UDP_PORTS, иначе диапазон
+# 1024-65535 перехватит чужой трафик.
+
+--filter-tcp=1024-65535
+--ipset=/etc/nfqws2/lists/ipset.list
+--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list
+--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list
+--out-range=-n3
+--payload=tls_client_hello,unknown
+--lua-desync=fake:blob=stun:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up:tcp_ts=-600000:payload=tls_client_hello,unknown
+--lua-desync=fake:blob=tls_clienthello_www_google_com:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up:tcp_ts=-600000:payload=tls_client_hello,unknown
+--payload=http_req
+--lua-desync=fake:blob=tls_clienthello_www_sferum_ru:repeats=6:tcp_seq=2:tcp_ack=-66000:tcp_ts_up:tcp_ts=-600000
+--new
+--filter-udp=1024-65535
+--ipset=/etc/nfqws2/lists/ipset.list
+--ipset-exclude=/etc/nfqws2/lists/ipset_exclude.list
+--ipset-exclude=/etc/nfqws2/lists/ipset_exclude-extra.list
+--out-range=-n2
+--payload=all
+--lua-desync=fake:blob=quic_initial_4pda_to:repeats=10:payload=all

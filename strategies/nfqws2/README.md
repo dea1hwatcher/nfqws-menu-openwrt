@@ -4,7 +4,7 @@
 
 Подготовлены [@Nare51](https://github.com/Nare51) с использованием ИИ.
 
-В каталоге **22** стандартных `.conf` (+ 4 дополнительных порта `alt14`, `alt15`, `alt16`, `syndata` из [kinlay0/zapret2-discord-youtube-strats](https://github.com/kinlay0/zapret2-discord-youtube-strats) v1.1.5; + отдельные кастомные конфиги сообщества: `MartinBacker`, `Uvvi2`, `alt4_mod`, `eduncey`, `hardcorp74`, `krushaaa` — они не входят в комплект Flowseal).
+В каталоге **55** `.conf`: **22** стандартных из Flowseal 1.10.4, **33** порта из [kinlay0/zapret2-discord-youtube-strats](https://github.com/kinlay0/zapret2-discord-youtube-strats) v1.1.5 (`alt14`…`syndata` и остальные) и отдельные кастомные конфиги сообщества (`MartinBacker`, `Uvvi2`, `alt4_mod`, `eduncey`, `hardcorp74`, `krushaaa` — не входят в комплект).
 
 Формат соответствует службе nfqws2: `NFQWS_BASE_ARGS`, `NFQWS_ARGS`, `NFQWS_ARGS_QUIC`, `NFQWS_ARGS_UDP`, `MODE_LIST` / `MODE_ALL` / `MODE_AUTO`, `NFQWS_EXTRA_ARGS`, `NFQWS_ARGS_IPSET`, `NFQWS_ARGS_CUSTOM` и служебные настройки. Отдельный run.sh не нужен.
 
@@ -20,7 +20,7 @@
 - **`NFQWS_ARGS_IPSET` пустой** — общая HTTP(S)/QUIC-стратегия не копируется службой автоматически. Исходные IP-профили с собственными списками и методами вынесены в `NFQWS_ARGS_CUSTOM` (в т.ч. 8443, особенности ALT7/EXP).
 - Game Filter **выключен**. Полные игровые фрагменты — в `game-profiles/*.args` (не самостоятельные конфиги; при включении не ставить диапазон 1024–65535 в начало CUSTOM).
 
-Все 26 стратегий (22 из Flowseal + 4 из kinlay0) и цепочки 231 профиля сохранены без смягчения repeats / split-pos / seqovl / cutoff / fooling / порядка fake и выбора blobs. Для Discord/game используются blobs из BAT 1.10.4, не произвольные alias.
+Все 55 стратегий (22 из Flowseal + 33 из kinlay0) и цепочки 492 профиля сохранены без смягчения repeats / split-pos / seqovl / cutoff / fooling / порядка fake и выбора blobs. Для Discord/game используются blobs из BAT 1.10.4, не произвольные alias.
 
 Особенности отдельных стратегий:
 
@@ -30,6 +30,9 @@
 - Для `multidisorder` в nfqws2 используется `multidisorder_legacy`.
 - **`alt14`/`alt15`/`alt16`/`syndata`** — порты из kinlay0 v1.1.5 (Windows/winws2). Их Lua-библиотеки побайтово совпадают с нашими, поэтому desync-цепочки перенесены без изменений; у `ip tls` (`80,443,8443`) отдельный 8443-профиль вынесен в `NFQWS_ARGS_CUSTOM`, а для `80/443` добавлены исключения пользовательских списков, чтобы не перехватывать доменные профили. Игровые профили лежат в `game-profiles/{alt14,alt15,alt16,syndata}.args` и **не включаются по умолчанию** (диапазон 1024–65535 ставится только после основных профилей).
 - В **`syndata`** включены `--ipcache-hostname=1` / `--ipcache-lifetime=7200`: техника работает на SYN-пакете, когда имя хоста ещё неизвестно. Без кэша адресов доменные списки для этого профиля не сработают. Как и в источнике, это не проверено на роутере.
+- Порты kinlay0 с именами, уже занятыми Flowseal (`EXP`, `FAKE TLS AUTO`, `SIMPLE FAKE*`), сохранены как `k0-*.conf` — исходные конфиги не затирались.
+- Для kinlay0 добавлены полные блобы `tls_clienthello_firpo_ru.bin` (1830 Б), `tls_clienthello_retext_ai.bin` (1783 Б), `tls_clienthello_steam_chat_com_full.bin` (1889 Б) и `tls_clienthello_teamspeak_com_full.bin` (1892 Б). Заглушки 1100 Б, используемые старыми конфигами, не тронуты.
+- `circular` / `circular1`: профиль `ip tls` **не разделён** на 8443 и 80/443 — в нём находятся `--lua-desync=circular` и теги `strategy=N`, дублирование профиля нарушило бы ротацию. `ch_clone` — динамический ключ `tls_client_hello_clone`, а не файл блоба.
 
 ## Таблица стратегий
 
@@ -53,6 +56,35 @@
 | general (ALT15).bat | `alt15.conf` | kinlay0: discord.media на google `seqovl=681`, repeats=6 |
 | general (ALT16).bat | `alt16.conf` | kinlay0: google `seqovl=681`, domain/IP tls на sferum |
 | general (SYNDATA).bat | `syndata.conf` | kinlay0: `syndata` + `http_domcase`/`http_hostcase`, нужен ipcache |
+| general (ALT14e).bat | `alt14e.conf` | fake + multisplit; seqovl=1830, seqovl=681, seqovl=661 |
+| general (CIRCULAR).bat | `circular.conf` | circular + fake + hostfakesplit + http_domcase + http_hostcase; seqovl=661, strategy=N, tls_mod |
+| general (CIRCULAR1).bat | `circular1.conf` | circular + fake + hostfakesplit + http_domcase + http_hostcase; seqovl=661, strategy=N, tls_mod |
+| general (DOUBLE FAKE).bat | `double-fake.conf` | fake + multidisorder + multisplit |
+| general (DOUBLE FAKE ALT).bat | `double-fake-alt.conf` | fake + multidisorder + multisplit |
+| general (DOUBLE FAKE ALT2).bat | `double-fake-alt2.conf` | fake + multidisorder + multisplit |
+| general (EXP1).bat | `exp1.conf` | fake + fakedsplit + multidisorder + multisplit; tls_mod |
+| general (EXP2).bat | `exp2.conf` | fake + multidisorder + multisplit; seqovl=1892, seqovl=681, tls_mod |
+| general (EXP3).bat | `exp3.conf` | fake + multidisorder + multisplit; seqovl=661, tls_mod |
+| general (EXP4).bat | `exp4.conf` | fake + multidisorder + multisplit; seqovl=1889, tls_mod |
+| general (EXP5).bat | `exp5.conf` | fake + multisplit + tls_client_hello_clone; tls_mod |
+| general (EXPERIMENTAL TS).bat | `experimental-ts.conf` | fake + multidisorder + multisplit |
+| general (FAKE TLS AUTO ALT4).bat | `fake-tls-auto-alt4.conf` | fake + multisplit; seqovl=681 |
+| general (FAKE TLS AUTO ALT5).bat | `fake-tls-auto-alt5.conf` | fake + multidisorder |
+| general (FAKE TLS AUTO ALT6).bat | `fake-tls-auto-alt6.conf` | fake + fakedsplit |
+| general (HOSTFAKESPLIT TS).bat | `hostfakesplit-ts.conf` | fake + hostfakesplit |
+| general (HOSTFAKESPLIT TS ALT).bat | `hostfakesplit-ts-alt.conf` | fake + hostfakesplit + multisplit; seqovl=1892, seqovl=681, tls_mod |
+| general (LEGACY).bat | `legacy.conf` | fake + fakedsplit |
+| general (LEGACY10).bat | `legacy10.conf` | fake + multidisorder + multisplit; tls_mod |
+| general (LEGACY11).bat | `legacy11.conf` | fake + multisplit; seqovl=681, seqovl=661 |
+| general (SIMPLE FAKE ALT3).bat | `simple-fake-alt3.conf` | fake + multidisorder + multisplit |
+| general (SIMPLE FAKE ALT4).bat | `simple-fake-alt4.conf` | fake + multidisorder + multisplit |
+| general (SINGLE FAKE).bat | `single-fake.conf` | fake + multidisorder + multisplit |
+| general (SINGLE FAKE ALT).bat | `single-fake-alt.conf` | fake + multidisorder + multisplit |
+| general (EXP).bat | `k0-exp.conf` | fake + hostfakesplit + multisplit; seqovl=681, seqovl=661 |
+| general (FAKE TLS AUTO).bat | `k0-fake-tls-auto.conf` | fake + multidisorder; tls_mod |
+| general (SIMPLE FAKE).bat | `k0-simple-fake.conf` | fake + hostfakesplit + multisplit |
+| general (SIMPLE FAKE ALT).bat | `k0-simple-fake-alt.conf` | fake + multidisorder + multisplit |
+| general (SIMPLE FAKE ALT2).bat | `k0-simple-fake-alt2.conf` | fake + multidisorder + multisplit |
 | general (EXP).bat | `exp.conf` | fake + multisplit seqovl=480 (stun2) |
 | general (FAKE TLS AUTO).bat | `fake_tls_auto.conf` | fake + multidisorder 1,midsld |
 | general (FAKE TLS AUTO ALT).bat | `fake_tls_auto_alt.conf` | fake + fakedsplit pos=1 |

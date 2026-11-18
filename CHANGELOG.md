@@ -19,6 +19,8 @@
 
 ### Не выпущено
 
+- **strategies/kinlay0** — портированы оставшиеся **29** стратегий из [kinlay0/zapret2-discord-youtube-strats](https://github.com/kinlay0/zapret2-discord-youtube-strats) v1.1.5: `alt14e`, `circular`, `circular1`, `double-fake*`, `exp1`–`exp5`, `experimental-ts`, `fake-tls-auto-alt4`–`alt6`, `hostfakesplit-ts*`, `legacy*`, `simple-fake-alt3/4`, `single-fake*`, а также `k0-exp`, `k0-fake-tls-auto`, `k0-simple-fake*` (одноимённые порты Flowseal не тронуты). Добавлены полные блобы `tls_clienthello_firpo_ru`, `tls_clienthello_retext_ai`, `tls_clienthello_steam_chat_com_full`, `tls_clienthello_teamspeak_com_full`; в `circular`/`circular1` профиль `ip tls` оставлен цельным, чтобы не дублировать `strategy=N`. `ch_clone` — динамический ключ `tls_client_hello_clone`, не файл. Метаданные: 55 стратегий / 492 профиля. На роутере не тестировалось
+
 - **strategies/nfqws2** — 4 новых порта из [kinlay0/zapret2-discord-youtube-strats](https://github.com/kinlay0/zapret2-discord-youtube-strats) v1.1.5: `alt14`, `alt15`, `alt16`, `syndata`. Lua-движок у источника идентичен нашему, desync-цепочки перенесены без изменений; имена блобов/списки и порты переведены в формат nfqws2, IP-профиль `80,443,8443` разделён (8443 вынесен в CUSTOM, для 80/443 добавлены исключения доменных списков). Игровые профили сохранены отдельно в `game-profiles/*.args` и по умолчанию выключены. `syndata` использует `--ipcache-hostname=1`/`--ipcache-lifetime=7200`; на роутере не тестировалось
 - **verification** — `profile-map.json` / `results.json` дополнены новыми конфигами (26 стратегий, 231 профиль); проверены синтаксис, раскрытие переменных, ссылки на blobs/lists и порядок desync-цепочек
 

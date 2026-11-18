@@ -57,6 +57,16 @@
       "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
     },
     {
+      "config": "alt14e.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
       "config": "alt15.conf",
       "shell_syntax": "PASS",
       "shell_expansion": "PASS",
@@ -149,6 +159,56 @@
       "effective_active_profiles": 11
     },
     {
+      "config": "circular.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 7,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "circular1.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 7,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "double-fake-alt.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "double-fake-alt2.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "double-fake.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
       "config": "exp.conf",
       "shell_syntax": "PASS",
       "shell_expansion": "PASS",
@@ -156,6 +216,66 @@
       "blob_and_list_references": "PASS",
       "source_strategy_sequences": "PASS",
       "effective_active_profiles": 12
+    },
+    {
+      "config": "exp1.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "exp2.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "exp3.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "exp4.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "exp5.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "experimental-ts.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
     },
     {
       "config": "fake-tls-auto-alt.conf",
@@ -185,6 +305,36 @@
       "effective_active_profiles": 11
     },
     {
+      "config": "fake-tls-auto-alt4.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "fake-tls-auto-alt5.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "fake-tls-auto-alt6.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
       "config": "fake-tls-auto.conf",
       "shell_syntax": "PASS",
       "shell_expansion": "PASS",
@@ -192,6 +342,106 @@
       "blob_and_list_references": "PASS",
       "source_strategy_sequences": "PASS",
       "effective_active_profiles": 11
+    },
+    {
+      "config": "hostfakesplit-ts-alt.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "hostfakesplit-ts.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "k0-exp.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "k0-fake-tls-auto.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "k0-simple-fake-alt.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "k0-simple-fake-alt2.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "k0-simple-fake.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "legacy.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "legacy10.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "legacy11.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
     },
     {
       "config": "simple-fake-alt.conf",
@@ -212,6 +462,26 @@
       "effective_active_profiles": 11
     },
     {
+      "config": "simple-fake-alt3.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "simple-fake-alt4.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
       "config": "simple-fake.conf",
       "shell_syntax": "PASS",
       "shell_expansion": "PASS",
@@ -219,6 +489,26 @@
       "blob_and_list_references": "PASS",
       "source_strategy_sequences": "PASS",
       "effective_active_profiles": 11
+    },
+    {
+      "config": "single-fake-alt.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
+    },
+    {
+      "config": "single-fake.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 8,
+      "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
     },
     {
       "config": "syndata.conf",
@@ -241,7 +531,7 @@
     }
   ],
   "lua_syntax": "PASS: LuaJIT 2.1 compilation of four files",
-  "original_strategy_profiles_preserved": 231,
+  "original_strategy_profiles_preserved": 492,
   "source_blobs": "PASS: byte-identical",
   "native_nfqws2_dry_run": "Not run; target Linux/Netcraze runtime unavailable",
   "router_network_test": "Not run",
