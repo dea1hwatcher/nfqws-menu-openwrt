@@ -1,0 +1,3663 @@
+#!/bin/sh
+# installer_warpscout.sh — меню warpscout для Entware (Keenetic / Netcraze)
+# Бинарники: https://github.com/rndnaame/warpscout (mipsel + arm)
+# Upstream:   https://github.com/vernette/warpscout (arm fallback)
+# Обёртка:    https://github.com/rndnaame/nfqws-menu
+#
+# Версионирование (MAJOR.MINOR.PATCH): при любых правках бампать SCRIPT_VERSION.
+#   PATCH — мелкие фиксы; MINOR — новое поведение; MAJOR — ломающие изменения.
+#
+# 1) Установка / обновление warpscout
+# 2) Создать аккаунт (warpscout register)
+# 3) Сканирование адресов (AWG → list + conf)
+# 4) Автоматический поиск / apply junk (find-junk)
+# 5) Применить conf (единый список WireGuard; [awg-manager] → API)
+# 6) Проверка туннеля (curl --interface nwg*/awg*)
+# 88) Удаление
+#
+# Запуск:
+#   sh installer_warpscout.sh
+#   curl -fsSL https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/installer_warpscout.sh | sh
+
+SCRIPT_VERSION="0.3.2"
+
+# ANSI (portable для ash/BusyBox)
+RED=$(printf '\033[0;31m')
+GREEN=$(printf '\033[0;32m')
+YELLOW=$(printf '\033[1;33m')
+CYAN=$(printf '\033[0;36m')
+BOLD=$(printf '\033[1m')
+DIM=$(printf '\033[2m')
+NC=$(printf '\033[0m')
+
+info()  { printf '%s\n' "${GREEN}[+]${NC} $*"; }
+warn()  { printf '%s\n' "${YELLOW}[!]${NC} $*"; }
+error() { printf '%s\n' "${RED}[!]${NC} $*"; }
+
+# ndmc: системные libs первыми (Entware OpenSSL ломает ndmc)
+ndmc_cli() {
+  if ! command -v ndmc >/dev/null 2>&1; then
+    return 127
+  fi
+  LD_LIBRARY_PATH=/lib:/usr/lib command ndmc -c "$@"
+}
+
+
+# короткий вывод длинного I1
+show_i1_brief() {
+  # без \n — для встраивания в info/printf
+  _i1="$1"
+  if [ -z "$_i1" ]; then
+    printf '%s' "${DIM}(нет)${NC}"
+    return
+  fi
+  _n=${#_i1}
+  if [ "$_n" -le 48 ]; then
+    printf '%s' "$_i1"
+  else
+    _head=$(printf '%s' "$_i1" | head -c 40)
+    printf '%s… (%s симв.)' "$_head" "$_n"
+  fi
+}
+
+BIN="/opt/bin/warpscout"
+ACCOUNT_FILE="/opt/root/warpscout-account.json"
+SCAN_OUT="/opt/root/warpscout-awg.list"
+CONF_OUT="/opt/root/warpscout-awg.conf"
+JUNK_FILE="/opt/root/warpscout-junk.env"
+FIND_JUNK_LOG="/opt/root/warpscout-find-junk.log"
+# rndnaame — сборки mipsel + arm; vernette — официальный upstream (arm)
+GITHUB_REPO="rndnaame/warpscout"
+OFFICIAL_REPO="vernette/warpscout"
+# fallback, если GitHub API недоступен
+PIN_VERSION="0.16.1"
+WS_VERSION=""
+WS_VERSION_SOURCE=""
+AWG_SETTINGS="/opt/etc/awg-manager/settings.json"
+AWG_API_KEY_FILE="/opt/etc/awg-manager/.api_key"
+TMPDIR="/tmp/warpscout-installer-$$"
+# свой tmp + чужие от мёртвых PID (обрыв SSH / kill -9 / ^C в родителе)
+_cleanup_tmpdir() {
+  rm -rf "$TMPDIR" 2>/dev/null || true
+}
+_cleanup_stale_tmp() {
+  for d in /tmp/warpscout-installer-*; do
+    [ -d "$d" ] || continue
+    # не трогаем свой каталог текущей сессии
+    [ "$d" = "$TMPDIR" ] && continue
+    pid=${d##*-}
+    case "$pid" in
+      ''|*[!0-9]*) rm -rf "$d" 2>/dev/null || true; continue ;;
+    esac
+    # PID жив? kill -0 — без сигнала
+    if kill -0 "$pid" 2>/dev/null; then
+      continue
+    fi
+    rm -rf "$d" 2>/dev/null || true
+  done
+}
+trap '_cleanup_tmpdir' EXIT INT TERM HUP
+_cleanup_stale_tmp
+mkdir -p "$TMPDIR" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# Архитектура
+# ---------------------------------------------------------------------------
+ARCH=""
+ARCH_RAW=""
+ARCH_SOURCE=""
+
+_arch_normalize() {
+  case "$1" in
+    aarch64*|arm64*)             echo "aarch64" ;;
+    armv7*|armv6*|arm*)          echo "" ;;
+    mipsel*|mipselsf*|mips64el*) echo "mipsel" ;;
+    mips*|mipssf*)               echo "mips" ;;
+    x86_64*|amd64*|x64*)         echo "x86_64" ;;
+    i[3-6]86*|x86*|i686*)        echo "x86" ;;
+    *)                           echo "" ;;
+  esac
+}
+
+_arch_pick_best() {
+  awk '
+    $1 == "arch" && $2 != "" && $2 != "all" {
+      p = $3 + 0
+      n = $2
+      bonus = 0
+      if (n ~ /^mipsel/ || n ~ /^mipselsf/ || n ~ /^mips64el/) bonus = 2
+      else if (n ~ /^aarch64/ || n ~ /^arm64/) bonus = 2
+      score = p * 10 + bonus
+      if (score > best) { best = score; name = n }
+    }
+    END { if (name != "") print name }
+  '
+}
+
+_arch_from_opkg() {
+  opkg print-architecture 2>/dev/null | _arch_pick_best
+}
+
+_arch_from_opkg_conf() {
+  conf="${1:-/opt/etc/opkg.conf}"
+  [ -f "$conf" ] || return 0
+  name=$(grep -E '^[[:space:]]*arch[[:space:]]+' "$conf" 2>/dev/null | _arch_pick_best)
+  [ -n "$name" ] && { printf '%s\n' "$name"; return 0; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      src/gz*|src\ *)
+        case "$line" in
+          *mipselsf*|*mips64el*) printf '%s\n' "mipselsf"; return 0 ;;
+          *mipssf*)              printf '%s\n' "mipssf"; return 0 ;;
+          *aarch64*|*arm64*)     printf '%s\n' "aarch64"; return 0 ;;
+        esac
+        ;;
+    esac
+  done < "$conf"
+}
+
+detect_arch() {
+  ARCH=""
+  ARCH_RAW=""
+  ARCH_SOURCE=""
+
+  ARCH_RAW=$(_arch_from_opkg)
+  ARCH=$(_arch_normalize "$ARCH_RAW")
+  [ -n "$ARCH" ] && ARCH_SOURCE="opkg"
+
+  if [ -z "$ARCH" ]; then
+    ARCH_RAW=$(_arch_from_opkg_conf /opt/etc/opkg.conf)
+    ARCH=$(_arch_normalize "$ARCH_RAW")
+    [ -n "$ARCH" ] && ARCH_SOURCE="conf"
+  fi
+
+  if [ -z "$ARCH" ]; then
+    um=$(uname -m 2>/dev/null)
+    case "$um" in
+      mips|mipsel|mips64|mips64el|"") ;;
+      *)
+        cand=$(_arch_normalize "$um")
+        if [ -n "$cand" ]; then
+          ARCH="$cand"
+          ARCH_RAW="$um"
+          ARCH_SOURCE="uname"
+        fi
+        ;;
+    esac
+  fi
+  [ -z "$ARCH_SOURCE" ] && ARCH_SOURCE="none"
+}
+
+need_arch() {
+  [ -z "$ARCH" ] && detect_arch
+  if [ -z "$ARCH" ]; then
+    error "Не удалось определить архитектуру."
+    return 1
+  fi
+  case "$ARCH" in
+    aarch64|mipsel)
+      return 0
+      ;;
+    mips)
+      error "mips (big-endian) не поддерживается — нужен mipsel-бинарник."
+      return 1
+      ;;
+    *)
+      error "Архитектура $ARCH не поддерживается (нужны aarch64 / mipsel)."
+      return 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# HTTP / зеркала
+# ---------------------------------------------------------------------------
+github_alt_urls() {
+  url="$1"
+  case "$url" in
+    https://github.com/*/releases/download/*)
+      printf '%s\n' "$url"
+      printf '%s\n' "https://ghproxy.net/${url}"
+      printf '%s\n' "https://mirror.ghproxy.com/${url}"
+      printf '%s\n' "https://ghfast.top/${url}"
+      printf '%s\n' "https://gh-proxy.com/${url}"
+      printf '%s\n' "https://gh.ddlc.top/${url}"
+      printf '%s\n' "https://gitproxy.click/${url}"
+      ;;
+    https://raw.githubusercontent.com/*)
+      rest="${url#https://raw.githubusercontent.com/}"
+      owner="${rest%%/*}"; rest="${rest#*/}"
+      repo="${rest%%/*}"; rest="${rest#*/}"
+      ref="${rest%%/*}"; path_rest="${rest#*/}"
+      printf '%s\n' "$url"
+      if [ -n "$owner" ] && [ -n "$repo" ] && [ -n "$ref" ]; then
+        printf '%s\n' "https://fastly.jsdelivr.net/gh/${owner}/${repo}@${ref}/${path_rest}"
+        printf '%s\n' "https://cdn.jsdelivr.net/gh/${owner}/${repo}@${ref}/${path_rest}"
+      fi
+      printf '%s\n' "https://ghproxy.net/${url}"
+      ;;
+    *)
+      printf '%s\n' "$url"
+      ;;
+  esac
+}
+
+_http_get_one() {
+  u="$1"
+  d="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --connect-timeout 5 --max-time 40 "$u" -o "$d" 2>/dev/null
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$d" -T 40 "$u" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
+http_get() {
+  # http_get URL DEST [quiet]
+  url="$1"
+  dest="$2"
+  quiet="${3:-}"
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    error "Нужны curl или wget."
+    return 1
+  fi
+  rm -f "$dest"
+  n=0
+  for alt in $(github_alt_urls "$url"); do
+    [ -n "$alt" ] || continue
+    n=$((n + 1))
+    if [ -z "$quiet" ]; then
+      info "Пробуем [$n]: $alt"
+    fi
+    if _http_get_one "$alt" "$dest" && [ -s "$dest" ]; then
+      if [ -z "$quiet" ] && [ "$alt" != "$url" ]; then
+        info "Скачано через зеркало"
+      fi
+      return 0
+    fi
+  done
+  return 1
+}
+
+# tag_name latest release (с «v» или без)
+_fetch_tag_name() {
+  repo="$1"
+  api="https://api.github.com/repos/${repo}/releases/latest"
+  body=""
+  if command -v curl >/dev/null 2>&1; then
+    body=$(curl -fsS --connect-timeout 3 --max-time 8 \
+      -H "Accept: application/vnd.github+json" "$api" 2>/dev/null) || body=""
+    if [ -z "$body" ]; then
+      body=$(curl -fsS --connect-timeout 3 --max-time 8 \
+        -H "Accept: application/vnd.github+json" \
+        "https://ghproxy.net/${api}" 2>/dev/null) || body=""
+    fi
+  fi
+  [ -n "$body" ] || return 1
+  # первое tag_name в JSON latest
+  printf '%s' "$body" | tr ',' '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
+# WS_VERSION / WS_VERSION_SOURCE: api → pin 0.16.1
+resolve_release_version() {
+  WS_VERSION=""
+  WS_VERSION_SOURCE=""
+  tag=$(_fetch_tag_name "$GITHUB_REPO" 2>/dev/null) || tag=""
+  if [ -n "$tag" ]; then
+    WS_VERSION=$(printf '%s' "$tag" | sed 's/^[vV]//')
+    WS_VERSION_SOURCE="api"
+  fi
+  case "$WS_VERSION" in
+    [0-9]*.[0-9]*) ;;
+    *)
+      WS_VERSION="$PIN_VERSION"
+      WS_VERSION_SOURCE="pin"
+      ;;
+  esac
+}
+
+# https://github.com/REPO/releases/download/vVER/warpscout_VER_SUFFIX.tar.gz
+release_asset_url() {
+  printf 'https://github.com/%s/releases/download/v%s/warpscout_%s_%s.tar.gz' \
+    "$1" "$2" "$2" "$3"
+}
+
+# Скачать tar.gz и найти bin warpscout → INSTALL_SRC
+install_from_tarball() {
+  url="$1"
+  label="$2"
+  archive="$TMPDIR/warpscout.tar.gz"
+  INSTALL_SRC=""
+  rm -f "$archive" "$TMPDIR/warpscout" 2>/dev/null || true
+  info "$label"
+  if ! http_get "$url" "$archive"; then
+    return 1
+  fi
+  sz=$(wc -c < "$archive" 2>/dev/null | tr -d ' ')
+  case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
+  if [ "$sz" -lt 100000 ]; then
+    warn "Архив слишком маленький (${sz} байт)."
+    return 1
+  fi
+  info "Распаковка (${sz} байт)..."
+  if ! tar -xzf "$archive" -C "$TMPDIR" 2>/dev/null; then
+    warn "Не удалось распаковать архив."
+    return 1
+  fi
+  if [ -f "$TMPDIR/warpscout" ]; then
+    INSTALL_SRC="$TMPDIR/warpscout"
+  else
+    INSTALL_SRC=$(find "$TMPDIR" -type f -name 'warpscout' 2>/dev/null | head -1)
+  fi
+  if [ -z "$INSTALL_SRC" ] || [ ! -f "$INSTALL_SRC" ]; then
+    warn "В архиве не найден бинарник warpscout."
+    INSTALL_SRC=""
+    return 1
+  fi
+  return 0
+}
+
+
+# ---------------------------------------------------------------------------
+# UI helpers
+# ---------------------------------------------------------------------------
+read_choice() {
+  if [ -c /dev/tty ]; then
+    read -r choice < /dev/tty
+  else
+    read -r choice
+  fi
+  printf '%s' "$choice"
+}
+
+confirm_yes() {
+  printf '%s' "${YELLOW}[?]${NC} $1 [y/N]: "
+  c=$(read_choice)
+  case "$c" in
+    y|Y|yes|YES|д|Д|да|Да) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Да по умолчанию [Y/n]
+confirm_Y() {
+  printf '%s' "${YELLOW}[?]${NC} $1 [Y/n]: "
+  c=$(read_choice)
+  case "$c" in
+    n|N|no|NO|н|Н|нет|Нет) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+pause() {
+  printf '%s' "Нажмите Enter..."
+  if [ -c /dev/tty ]; then
+    read -r _ < /dev/tty
+  else
+    read -r _
+  fi
+}
+
+ensure_tmpdir() {
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+}
+
+# Строка меню туннеля (2 строки). GLOBAL=false → всё DIM.
+# print_tunnel_menu_line N KEY STATUS NAME [ADDR] [ENDPOINT] [GLOBAL] [EXTRA_TAG]
+print_tunnel_menu_line() {
+  _n="$1"
+  _key="$2"
+  _st="${3:-?}"
+  _name="${4:-}"
+  _addr="${5:-}"
+  _ep="${6:-}"
+  _glob="${7:-true}"
+  _xtag="${8:-}"
+  if [ "$_glob" = "false" ]; then
+    printf '  %s%d)%s %s%s' "$DIM" "$_n" "$NC" "$DIM" "$_key"
+    if [ -n "$_name" ] && [ "$_name" != "$_key" ]; then
+      printf ' · %s' "$_name"
+    fi
+    printf '  [%s]' "$_st"
+    [ -n "$_xtag" ] && printf '  [%s]' "$_xtag"
+    printf '%s\n' "$NC"
+    if [ -n "$_addr" ] || [ -n "$_ep" ]; then
+      printf '      %s' "$DIM"
+      [ -n "$_addr" ] && printf '%s' "$_addr"
+      if [ -n "$_ep" ]; then
+        [ -n "$_addr" ] && printf ' · '
+        printf '%s' "$_ep"
+      fi
+      printf '%s\n' "$NC"
+    fi
+    return 0
+  fi
+  printf '  %s%d)%s %s' "$BOLD" "$_n" "$NC" "$_key"
+  if [ -n "$_name" ] && [ "$_name" != "$_key" ]; then
+    printf ' · %s%s%s' "$GREEN" "$_name" "$NC"
+  fi
+  printf '  %s[%s]%s' "$DIM" "$_st" "$NC"
+  [ -n "$_xtag" ] && printf '  %s[%s]%s' "$CYAN" "$_xtag" "$NC"
+  printf '\n'
+  if [ -n "$_addr" ] || [ -n "$_ep" ]; then
+    printf '      '
+    [ -n "$_addr" ] && printf '%s' "$_addr"
+    if [ -n "$_ep" ]; then
+      [ -n "$_addr" ] && printf ' · '
+      printf '%s%s%s' "$CYAN" "$_ep" "$NC"
+    fi
+    printf '\n'
+  fi
+}
+
+# Разделитель блока local (global: false)
+print_local_sep() {
+  printf '  %s── local (global: false) ──%s\n' "$DIM" "$NC"
+}
+
+# Сортировка: true выше, false ниже.
+# mode=end — global последнее поле (…|true)
+# mode=mid  — global 5-е поле (a|b|c|d|true|e)
+sort_global_last() {
+  _sg_src="$1"
+  _sg_mode="${2:-end}"
+  [ -s "$_sg_src" ] || return 1
+  _sg_dst="$_sg_src.sorted"
+  : > "$_sg_dst"
+  if [ "$_sg_mode" = "end" ]; then
+    grep '|true$' "$_sg_src" 2>/dev/null >> "$_sg_dst" || true
+    grep '|false$' "$_sg_src" 2>/dev/null >> "$_sg_dst" || true
+    grep -vE '\|(true|false)$' "$_sg_src" 2>/dev/null >> "$_sg_dst" || true
+  else
+    grep '|true|' "$_sg_src" 2>/dev/null >> "$_sg_dst" || true
+    grep '|false|' "$_sg_src" 2>/dev/null >> "$_sg_dst" || true
+    while IFS= read -r _sg_ln || [ -n "$_sg_ln" ]; do
+      case "$_sg_ln" in
+        *'|true|'*) continue ;;
+        *'|false|'*) continue ;;
+      esac
+      [ -n "$_sg_ln" ] && printf '%s\n' "$_sg_ln" >> "$_sg_dst"
+    done < "$_sg_src"
+  fi
+  mv -f "$_sg_dst" "$_sg_src" 2>/dev/null || true
+}
+
+# Ответ API: success:true?
+awg_api_ok() {
+  printf '%s' "$1" | grep -q '"success"[[:space:]]*:[[:space:]]*true'
+}
+
+
+is_installed() {
+  [ -x "$BIN" ]
+}
+
+installed_version() {
+  if [ -x "$BIN" ]; then
+    v=$("$BIN" version 2>/dev/null | head -1)
+    if [ -n "$v" ]; then
+      printf '%s\n' "$v" | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p'
+      return 0
+    fi
+  fi
+  return 1
+}
+
+has_account() {
+  [ -f "$ACCOUNT_FILE" ] && [ -s "$ACCOUNT_FILE" ]
+}
+
+has_conf() {
+  [ -f "$CONF_OUT" ] && [ -s "$CONF_OUT" ]
+}
+
+is_awg_manager_installed() {
+  if opkg list-installed 2>/dev/null | grep -q '^awg-manager '; then
+    return 0
+  fi
+  [ -d /opt/etc/awg-manager ]
+}
+
+show_status() {
+  # компактно, но по смыслу группами
+  a=""
+  if is_installed; then
+    ver=$(installed_version 2>/dev/null) || ver=""
+    a="bin ${ver:-ok}"
+  else
+    a="bin ✗"
+  fi
+  if has_account; then a="$a · аккаунт ✓"; else a="$a · аккаунт ✗"; fi
+
+  b=""
+  if [ -f "$SCAN_OUT" ] && [ -s "$SCAN_OUT" ]; then
+    n=$(wc -l < "$SCAN_OUT" 2>/dev/null | tr -d ' ')
+    b="list ${n:-?}"
+  fi
+  if has_conf; then b="${b:+$b · }conf ✓"; fi
+  if [ -f "$JUNK_FILE" ] && [ -s "$JUNK_FILE" ]; then b="${b:+$b · }junk ✓"; fi
+  if is_awg_manager_installed; then b="${b:+$b · }awg-manager ✓"; fi
+
+  printf '  %s%s%s\n' "$GREEN" "$a" "$NC"
+  [ -n "$b" ] && printf '  %s%s%s\n' "$DIM" "$b" "$NC"
+}
+
+# ---------------------------------------------------------------------------
+# 1) Установка / обновление
+# ---------------------------------------------------------------------------
+do_install() {
+  echo
+  info "Установка / обновление warpscout"
+  need_arch || return 1
+
+  mkdir -p /opt/bin /opt/root "$TMPDIR" 2>/dev/null || true
+
+  resolve_release_version
+  info "Версия: v${WS_VERSION} (${WS_VERSION_SOURCE})"
+
+  src=""
+  case "$ARCH" in
+    aarch64)
+      info "Архитектура: aarch64"
+      url=$(release_asset_url "$GITHUB_REPO" "$WS_VERSION" "linux_arm64")
+      if install_from_tarball "$url" "${GITHUB_REPO} · linux_arm64"; then
+        src="$INSTALL_SRC"
+      else
+        url=$(release_asset_url "$OFFICIAL_REPO" "$WS_VERSION" "linux_arm64")
+        warn "Fallback upstream ${OFFICIAL_REPO}..."
+        if install_from_tarball "$url" "${OFFICIAL_REPO} · linux_arm64"; then
+          src="$INSTALL_SRC"
+        elif [ "$WS_VERSION" != "$PIN_VERSION" ]; then
+          url=$(release_asset_url "$OFFICIAL_REPO" "$PIN_VERSION" "linux_arm64")
+          if install_from_tarball "$url" "${OFFICIAL_REPO} · pin v${PIN_VERSION}"; then
+            src="$INSTALL_SRC"
+          fi
+        fi
+      fi
+      ;;
+    mipsel)
+      info "Архитектура: mipsel"
+      url=$(release_asset_url "$GITHUB_REPO" "$WS_VERSION" "linux_mipsle")
+      if install_from_tarball "$url" "${GITHUB_REPO} · linux_mipsle"; then
+        src="$INSTALL_SRC"
+      elif [ "$WS_VERSION" != "$PIN_VERSION" ]; then
+        url=$(release_asset_url "$GITHUB_REPO" "$PIN_VERSION" "linux_mipsle")
+        if install_from_tarball "$url" "${GITHUB_REPO} · pin v${PIN_VERSION}"; then
+          src="$INSTALL_SRC"
+        fi
+      fi
+      ;;
+    *)
+      error "Неподдерживаемая ARCH=$ARCH"
+      return 1
+      ;;
+  esac
+
+  if [ -z "$src" ] || [ ! -f "$src" ]; then
+    error "Бинарник не получен."
+    return 1
+  fi
+
+  if ! cp -f "$src" "$BIN"; then
+    error "Не удалось скопировать в $BIN"
+    return 1
+  fi
+  chmod +x "$BIN" 2>/dev/null || true
+
+  ver=$(installed_version 2>/dev/null) || ver=""
+  info "Установлено: $BIN ${ver:+(v$ver)}"
+  printf '%s\n' "${DIM}Релиз: v${WS_VERSION} (${WS_VERSION_SOURCE}) · ${GITHUB_REPO}${NC}"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# 2) Создать аккаунт
+# ---------------------------------------------------------------------------
+do_register() {
+  echo
+  info "Создание аккаунта WARP (warpscout register)"
+  if ! is_installed; then
+    error "warpscout не установлен. Сначала пункт 1."
+    return 1
+  fi
+
+  mkdir -p /opt/root 2>/dev/null || true
+
+  if has_account; then
+    warn "Файл аккаунта уже есть: $ACCOUNT_FILE"
+    if ! confirm_yes "Пересоздать аккаунт?"; then
+      info "Отменено."
+      return 0
+    fi
+    rm -f "$ACCOUNT_FILE" 2>/dev/null || true
+  fi
+
+  cd /opt/root || cd /tmp || true
+  if ! "$BIN" register; then
+    error "register завершился с ошибкой."
+    warn "При блокировке api.cloudflareclient.com см. документацию warpscout (account)."
+    return 1
+  fi
+
+  if [ ! -f "$ACCOUNT_FILE" ]; then
+    for cand in \
+      ./warpscout-account.json \
+      /tmp/warpscout-account.json \
+      "$(dirname "$BIN")/warpscout-account.json"
+    do
+      if [ -f "$cand" ]; then
+        mv -f "$cand" "$ACCOUNT_FILE" 2>/dev/null || cp -f "$cand" "$ACCOUNT_FILE"
+        break
+      fi
+    done
+  fi
+
+  if has_account; then
+    info "Аккаунт сохранён: $ACCOUNT_FILE"
+    return 0
+  fi
+  error "Файл аккаунта не найден после register."
+  return 1
+}
+
+
+# Загрузить найденные junk-параметры (JC JMIN JMAX I1)
+load_junk_params() {
+  JC=""; JMIN=""; JMAX=""; I1=""
+  [ -f "$JUNK_FILE" ] && [ -s "$JUNK_FILE" ] || return 1
+  # shellcheck: файл пишем сами
+  # JC=6 etc.
+  JC=$(sed -n 's/^JC=//p' "$JUNK_FILE" | head -1)
+  JMIN=$(sed -n 's/^JMIN=//p' "$JUNK_FILE" | head -1)
+  JMAX=$(sed -n 's/^JMAX=//p' "$JUNK_FILE" | head -1)
+  # I1 может содержать пробелы и <> — храним как I1=... одной строкой
+  I1=$(sed -n 's/^I1=//p' "$JUNK_FILE" | head -1)
+  [ -n "$JC" ] || [ -n "$I1" ]
+}
+
+save_junk_params() {
+  # save_junk_params jc jmin jmax i1
+  mkdir -p /opt/root 2>/dev/null || true
+  {
+    printf 'JC=%s\n' "$1"
+    printf 'JMIN=%s\n' "$2"
+    printf 'JMAX=%s\n' "$3"
+    printf 'I1=%s\n' "$4"
+  } > "$JUNK_FILE"
+  info "Параметры сохранены: $JUNK_FILE"
+  info "  -jc $1 -jmin $2 -jmax $3"
+  [ -n "$4" ] && info "  -i1 $(show_i1_brief "$4")"
+}
+
+# Разобрать лог find-junk → JC JMIN JMAX I1
+parse_find_junk_log() {
+  # Лучший Attempt по N/M working; либо Good enough / scan -jc
+  logf="$1"
+  [ -f "$logf" ] || return 1
+  JC=""; JMIN=""; JMAX=""; I1=""
+
+  # 1) готовая команда scan / Good enough
+  line=$(grep -E 'scan .*(-jc|--jc)|Good enough:.*jc=' "$logf" 2>/dev/null | tail -1)
+  if [ -n "$line" ]; then
+    JC=$(printf '%s\n' "$line" | sed -n 's/.*-jc[[:space:]]\+\([0-9][0-9]*\).*/\1/p;s/.*jc=\([0-9][0-9]*\).*/\1/p' | head -1)
+    JMIN=$(printf '%s\n' "$line" | sed -n 's/.*-jmin[[:space:]]\+\([0-9][0-9]*\).*/\1/p;s/.*jmin=\([0-9][0-9]*\).*/\1/p' | head -1)
+    JMAX=$(printf '%s\n' "$line" | sed -n 's/.*-jmax[[:space:]]\+\([0-9][0-9]*\).*/\1/p;s/.*jmax=\([0-9][0-9]*\).*/\1/p' | head -1)
+    I1=$(printf '%s\n' "$line" | sed -n 's/.*-i1[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    [ -z "$I1" ] && I1=$(printf '%s\n' "$line" | sed -n "s/.*-i1[[:space:]]*'\\([^']*\\)'.*/\\1/p" | head -1)
+  fi
+
+  # 2) иначе — Attempt с максимальным N в «N/M working»
+  if [ -z "$JC" ]; then
+    best_n=-1
+    best_line=""
+    while IFS= read -r al || [ -n "$al" ]; do
+      case "$al" in
+        *"Attempt "*"jc="*) ;;
+        *) continue ;;
+      esac
+      n=$(printf '%s\n' "$al" | sed -n 's/.*[[:space:]]\([0-9][0-9]*\)\/[0-9][0-9]*[[:space:]]*working.*/\1/p' | head -1)
+      case "$n" in ''|*[!0-9]*) n=0 ;; esac
+      if [ "$n" -gt "$best_n" ]; then
+        best_n=$n
+        best_line=$al
+      fi
+    done <<EOF
+$(grep -E 'Attempt [0-9]+:[[:space:]]*jc=' "$logf" 2>/dev/null)
+EOF
+    if [ -n "$best_line" ] && [ "$best_n" -ge 0 ]; then
+      line=$best_line
+      JC=$(printf '%s\n' "$line" | sed -n 's/.*jc=\([0-9][0-9]*\).*/\1/p' | head -1)
+      JMIN=$(printf '%s\n' "$line" | sed -n 's/.*jmin=\([0-9][0-9]*\).*/\1/p' | head -1)
+      JMAX=$(printf '%s\n' "$line" | sed -n 's/.*jmax=\([0-9][0-9]*\).*/\1/p' | head -1)
+      # score в подсказку
+      FIND_JUNK_SCORE="${best_n}"
+    fi
+  fi
+
+  # i1 из Ready-to-run, если ещё нет
+  if [ -z "$I1" ]; then
+    I1=$(grep -E 'Ready-to-run scan|-i1 "' "$logf" 2>/dev/null | tail -1 | \
+      sed -n 's/.*-i1[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  fi
+
+  [ -n "$JC" ] || return 1
+  return 0
+}
+
+
+# Прописать Jc/Jmin/Jmax/I1 в conf (секция [Interface])
+patch_conf_junk() {
+  conf="$1"
+  [ -f "$conf" ] || return 1
+  load_junk_params || return 1
+
+  tmp="$conf.junknew"
+  # awk: обновляет или добавляет ключи в [Interface]
+  awk -v jc="$JC" -v jmin="$JMIN" -v jmax="$JMAX" -v i1="$I1" '
+    BEGIN {
+      inif=0
+      seen_jc=0; seen_jmin=0; seen_jmax=0; seen_i1=0
+    }
+    function flush_missing() {
+      if (jc != "" && !seen_jc)   print "Jc = " jc
+      if (jmin != "" && !seen_jmin) print "Jmin = " jmin
+      if (jmax != "" && !seen_jmax) print "Jmax = " jmax
+      if (i1 != "" && !seen_i1)   print "I1 = " i1
+      seen_jc=1; seen_jmin=1; seen_jmax=1; seen_i1=1
+    }
+    /^\[Interface\]/ { inif=1; print; next }
+    /^\[/ {
+      if (inif) { flush_missing(); inif=0 }
+      print; next
+    }
+    inif && /^[[:space:]]*[Jj][Cc][[:space:]]*=/ {
+      if (jc != "") { print "Jc = " jc; seen_jc=1; next }
+    }
+    inif && /^[[:space:]]*[Jj][Mm][Ii][Nn][[:space:]]*=/ {
+      if (jmin != "") { print "Jmin = " jmin; seen_jmin=1; next }
+    }
+    inif && /^[[:space:]]*[Jj][Mm][Aa][Xx][[:space:]]*=/ {
+      if (jmax != "") { print "Jmax = " jmax; seen_jmax=1; next }
+    }
+    inif && /^[[:space:]]*[Ii]1[[:space:]]*=/ {
+      if (i1 != "") { print "I1 = " i1; seen_i1=1; next }
+    }
+    { print }
+    END {
+      if (inif) flush_missing()
+      else if (!seen_jc && !seen_jmin && !seen_jmax && !seen_i1 && (jc!=""||jmin!=""||jmax!=""||i1!="")) {
+        print "[Interface]"
+        flush_missing()
+      }
+    }
+  ' "$conf" > "$tmp" 2>/dev/null || return 1
+  mv -f "$tmp" "$conf" || return 1
+  info "В $conf записаны junk-параметры:"
+  [ -n "$JC" ] && info "  Jc = $JC"
+  [ -n "$JMIN" ] && info "  Jmin = $JMIN"
+  [ -n "$JMAX" ] && info "  Jmax = $JMAX"
+  [ -n "$I1" ] && info "  I1 = $(show_i1_brief "$I1")"
+  return 0
+}
+
+# Replace conf в выбранный туннель awg-manager (без смены endpoint/имени)
+
+# ASC junk на конкретный WireguardN (системный, не awg-manager)
+sys_wg_apply_junk_to() {
+  ifname="$1"
+  desc="${2:-$ifname}"
+  if ! command -v ndmc >/dev/null 2>&1; then
+    error "ndmc не найден."
+    return 1
+  fi
+  load_junk_params || return 1
+  [ -n "$JC" ] || JC=0
+  [ -n "$JMIN" ] || JMIN=0
+  [ -n "$JMAX" ] || JMAX=0
+  s1=0; s2=0; s3=0; s4=0
+  h1=1; h2=2; h3=3; h4=4
+
+  info "Остановка $ifname (перед ASC)..."
+  ndmc_cli "interface $ifname down" >/dev/null 2>&1 || true
+  sleep 1
+
+  _asc_ok=0
+  if [ -n "$I1" ]; then
+    if ndmc_cli "interface $ifname wireguard asc $JC $JMIN $JMAX $s1 $s2 $h1 $h2 $h3 $h4 $s3 $s4 \"$I1\" \"\" \"\" \"\" \"\"" >/dev/null 2>&1; then
+      _asc_ok=1
+      info "ASC + I1 → $ifname ($desc)"
+    fi
+  fi
+  if [ "$_asc_ok" != "1" ]; then
+    if ndmc_cli "interface $ifname wireguard asc $JC $JMIN $JMAX $s1 $s2 $h1 $h2 $h3 $h4" >/dev/null 2>&1; then
+      _asc_ok=1
+      info "ASC (без I1) → $ifname"
+      [ -n "$I1" ] && warn "I1 не принят CLI — веб-импорт conf надёжнее."
+    else
+      error "ASC не принят для $ifname."
+      ndmc_cli "interface $ifname up" >/dev/null 2>&1 || true
+      return 1
+    fi
+  fi
+
+  ndmc_cli "interface $ifname up" >/dev/null 2>&1 || warn "interface up — проверьте статус."
+  ndmc_cli "system configuration save" >/dev/null 2>&1 || true
+  info "Junk → системный $ifname. Проверка: п.6"
+  return 0
+}
+
+# Junk через API: conf с Jc/…, endpoint туннеля сохраняем
+awg_apply_junk_for_ndms() {
+  _ndms="$1"
+  _ndesc="$2"
+  _conf="$3"
+
+  if ! is_awg_manager_installed; then
+    error "awg-manager не установлен."
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    error "Нужен curl."
+    return 1
+  fi
+  if ! awg_load_api_key; then
+    error "API-ключ не задан."
+    return 1
+  fi
+  _base=$(awg_api_base)
+  _key="$AWG_KEY"
+  _listf="$TMPDIR/awg-tunnels-junk2.txt"
+  if ! awg_list_tunnels "$_base" "$_key" "$_listf" >/dev/null 2>&1 || [ ! -s "$_listf" ]; then
+    error "Список туннелей awg-manager недоступен."
+    return 1
+  fi
+
+  _tid=""; _tname=""; _tend=""
+  while IFS='|' read -r tid tname tstat tend taddr tifc tndms || [ -n "$tid" ]; do
+    [ -n "$tid" ] || continue
+    if [ -n "$_ndms" ] && [ "$tndms" = "$_ndms" ]; then
+      _tid="$tid"; _tname="$tname"; _tend="$tend"; break
+    fi
+    if [ -n "$_ndesc" ] && [ "$tname" = "$_ndesc" ]; then
+      _tid="$tid"; _tname="$tname"; _tend="$tend"; break
+    fi
+  done < "$_listf"
+  if [ -z "$_tid" ]; then
+    error "Туннель awg-manager для $_ndms не найден."
+    return 1
+  fi
+
+  info "Туннель: $_tid · ${_tname:-?}  [awg-manager]"
+  # endpoint туннеля не меняем
+  _work="$TMPDIR/junk-awg-apply.conf"
+  cp -f "$_conf" "$_work" 2>/dev/null || return 1
+  if [ -n "$_tend" ]; then
+    info "Endpoint оставляем: $_tend"
+    awg_patch_conf_endpoint "$_work" "$_work.ep" "$_tend" 2>/dev/null && mv -f "$_work.ep" "$_work"
+  fi
+  if ! awg_ensure_free_address "$_work" "$_listf" "$_tid"; then
+    return 1
+  fi
+
+  info "Остановка $_tid..."
+  awg_control stop "$_tid" "$_key" "$_base" || true
+  _bodyf="$TMPDIR/awg-junk-ndms.json"
+  {
+    printf '{"content":"'
+    tr -d '\r' < "$_work" | sed 's/\\/\\\\/g;s/"/\\"/g;s/\t/\\t/g' | awk '{printf "%s\\n",$0}'
+    printf '"}'
+  } > "$_bodyf"
+  info "POST ${_base}/tunnels/replace?id=${_tid}  (junk)"
+  _resp=$(curl -sS --connect-timeout 5 --max-time 30 \
+    -X POST "${_base}/tunnels/replace?id=${_tid}" \
+    -H "Authorization: Bearer ${_key}" \
+    -H "Content-Type: application/json" \
+    -d @"$_bodyf" 2>/dev/null) || _resp=""
+  if ! awg_api_ok "$_resp"; then
+    error "replace не удался."
+    [ -n "$_resp" ] && printf '%s\n' "$_resp"
+    return 1
+  fi
+  info "Junk → $_tid (API)."
+  sleep 1
+  if ! awg_control start "$_tid" "$_key" "$_base"; then
+    awg_control restart "$_tid" "$_key" "$_base" || true
+  fi
+  return 0
+}
+
+# Применить сохранённый junk: conf и/или туннель (единый список)
+do_apply_junk() {
+  echo
+  info "Применение junk-параметров"
+  if ! load_junk_params; then
+    error "Нет $JUNK_FILE — сначала п.4 find-junk."
+    return 1
+  fi
+  info "Текущие: jc=${JC:-?} jmin=${JMIN:-?} jmax=${JMAX:-?}"
+  [ -n "$I1" ] && info "  i1 = $(show_i1_brief "$I1")"
+
+  echo
+  printf '%s\n' "${BOLD}Куда применить:${NC}"
+  echo "  1) Только conf ($CONF_OUT)"
+  echo "  2) Заменить параметры туннеля"
+  echo "  0) Отмена"
+  echo
+  printf '  %sВыбор:%s ' "$BOLD" "$NC"
+  sel=$(read_choice)
+  echo
+  case "$sel" in
+    0|"") info "Отменено."; return 0 ;;
+    1)
+      if ! has_conf; then
+        error "Нет conf: $CONF_OUT (сначала п.3 scan)."
+        return 1
+      fi
+      patch_conf_junk "$CONF_OUT" || return 1
+      return 0
+      ;;
+    2) ;;
+    *) warn "Неверный выбор."; return 1 ;;
+  esac
+
+  # --- 2) единый список WireGuard ---
+  if ! has_conf; then
+    error "Нет conf: $CONF_OUT (сначала п.3 scan)."
+    return 1
+  fi
+  patch_conf_junk "$CONF_OUT" || return 1
+  conf_use="$CONF_OUT"
+
+  managedf="$TMPDIR/awg-ndms-junk.txt"
+  listf="$TMPDIR/sys-wg-junk-list.txt"
+  if ! sys_wg_refresh_lists "$listf" "$managedf"; then
+    error "Нет Wireguard*-интерфейсов."
+    return 1
+  fi
+  if ! pick_sys_wg_menu "Туннель для junk:" "$listf" "$managedf"; then
+    return 0
+  fi
+  [ "$PICK_KIND" = "iface" ] || return 1
+
+  if [ "$PICK_MANAGED" = "1" ]; then
+    info "$PICK_WG → awg-manager API"
+    awg_apply_junk_for_ndms "$PICK_WG" "$PICK_DESC" "$conf_use"
+    return $?
+  fi
+  info "$PICK_WG → системный (ASC / NDMS)"
+  sys_wg_apply_junk_to "$PICK_WG" "$PICK_DESC"
+  return $?
+}
+
+
+# Загрузить Jc/Jmin/Jmax/I1 из json/API туннеля → глобальные JC/JMIN/JMAX/I1
+# load_junk_from_tunnel_id TID
+load_junk_from_tunnel_id() {
+  tid="$1"
+  [ -n "$tid" ] || return 1
+  body=""
+  localf="/opt/etc/awg-manager/tunnels/${tid}.json"
+  if [ -f "$localf" ]; then
+    body=$(cat "$localf" 2>/dev/null) || body=""
+  fi
+  if [ -z "$body" ]; then
+    base=$(awg_api_base)
+    [ -n "$AWG_KEY" ] || awg_load_api_key_quiet || return 1
+    for path in \
+      "tunnels/${tid}" \
+      "tunnels/get?id=${tid}" \
+      "tunnels?id=${tid}" \
+      "export/conf?id=${tid}" \
+      "tunnels/export?id=${tid}"
+    do
+      body=$(curl -sS --connect-timeout 3 --max-time 8 \
+        -H "Authorization: Bearer ${AWG_KEY}" \
+        "${base}/${path}" 2>/dev/null) || body=""
+      case "$body" in
+        *'"jc"'*|*"Jc = "*|*"jc":*) break ;;
+        *) body="" ;;
+      esac
+    done
+  fi
+  [ -n "$body" ] || return 1
+  JC=$(printf '%s' "$body" | sed -n 's/.*"jc"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p;s/.*[Jj]c[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+  JMIN=$(printf '%s' "$body" | sed -n 's/.*"jmin"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p;s/.*[Jj]min[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+  JMAX=$(printf '%s' "$body" | sed -n 's/.*"jmax"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p;s/.*[Jj]max[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+  I1=$(printf '%s' "$body" | sed -n 's/.*"i1"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;s/.*[Ii]1[[:space:]]*=[[:space:]]*\(.*\)/\1/p' | head -1)
+  I1=$(printf '%s' "$I1" | sed 's/\r$//;s/[[:space:]]*$//')
+  [ -n "$JC" ]
+}
+
+# Интерактивный выбор туннеля → JC/JMIN/JMAX/I1 (без записи на диск)
+pick_junk_from_tunnel_menu() {
+  if ! is_awg_manager_installed; then
+    error "awg-manager не установлен."
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    error "Нужен curl."
+    return 1
+  fi
+  if ! awg_load_api_key; then
+    error "Нет API-ключа awg-manager."
+    return 1
+  fi
+  base=$(awg_api_base)
+  ensure_tmpdir
+  listf="$TMPDIR/junk-tun-pick.txt"
+  if ! awg_list_tunnels "$base" "$AWG_KEY" "$listf" 2>/dev/null || [ ! -s "$listf" ]; then
+    error "Не удалось получить список туннелей."
+    return 1
+  fi
+  echo
+  printf '%s\n' "${BOLD}Туннель (junk-параметры):${NC}"
+  n=0
+  while IFS='|' read -r tid tname tstat tend taddr tifc _tndms || [ -n "$tid" ]; do
+    [ -n "$tid" ] || continue
+    n=$((n + 1))
+    _label="$tname"
+    [ -n "$tifc" ] && [ "$tifc" != "$tname" ] && _label="${tname} · ${tifc}"
+    print_tunnel_menu_line "$n" "$tid" "${tstat:-?}" "$_label" "$taddr" "$tend" "true"
+  done < "$listf"
+  echo "  0) Отмена"
+  echo
+  printf '  %sВыбор:%s ' "$BOLD" "$NC"
+  sel=$(read_choice)
+  echo
+  case "$sel" in
+    0|"") info "Отменено."; return 1 ;;
+    *[!0-9]*) warn "Неверный выбор."; return 1 ;;
+  esac
+  if [ "$sel" -lt 1 ] || [ "$sel" -gt "$n" ]; then
+    warn "Неверный номер."
+    return 1
+  fi
+  line=$(sed -n "${sel}p" "$listf")
+  tid=$(printf '%s' "$line" | cut -d'|' -f1)
+  tname=$(printf '%s' "$line" | cut -d'|' -f2)
+  if ! load_junk_from_tunnel_id "$tid"; then
+    error "В туннеле $tid нет Jc (json/API)."
+    return 1
+  fi
+  info "Из «${tname}» ($tid): jc=$JC jmin=${JMIN:-?} jmax=${JMAX:-?}"
+  [ -n "$I1" ] && info "i1: $(show_i1_brief "$I1")" || warn "i1 пуст"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Junk из туннеля awg-manager (Jc/Jmin/Jmax/I1 из API)
+# ---------------------------------------------------------------------------
+do_junk_from_tunnel() {
+  echo
+  info "Junk-параметры из туннеля awg-manager"
+  if ! is_awg_manager_installed; then
+    error "awg-manager не установлен."
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    error "Нужен curl."
+    return 1
+  fi
+  if ! awg_load_api_key; then
+    error "Нет API-ключа awg-manager."
+    return 1
+  fi
+  base=$(awg_api_base)
+  ensure_tmpdir
+
+  # 1) список туннелей (list — без jc; детали подтянем после выбора)
+  listf="$TMPDIR/junk-tun-list.txt"
+  if ! awg_list_tunnels "$base" "$AWG_KEY" "$listf" 2>/dev/null || [ ! -s "$listf" ]; then
+    error "Не удалось получить список туннелей."
+    return 1
+  fi
+
+  echo
+  printf '%s\n' "${BOLD}Туннели awg-manager:${NC}"
+  n=0
+  while IFS='|' read -r tid tname tstat tend taddr tifc _tndms || [ -n "$tid" ]; do
+    [ -n "$tid" ] || continue
+    n=$((n + 1))
+    # key=id, show ifc in name area if useful
+    _label="$tname"
+    [ -n "$tifc" ] && [ "$tifc" != "$tname" ] && _label="${tname} · ${tifc}"
+    print_tunnel_menu_line "$n" "$tid" "${tstat:-?}" "$_label" "$taddr" "$tend" "true"
+  done < "$listf"
+  echo "  0) Отмена"
+  echo
+  printf '  %sВыбор:%s ' "$BOLD" "$NC"
+  sel=$(read_choice)
+  echo
+  case "$sel" in
+    0|"") info "Отменено."; return 0 ;;
+    *[!0-9]*) warn "Неверный выбор."; return 1 ;;
+  esac
+  if [ "$sel" -lt 1 ] || [ "$sel" -gt "$n" ]; then
+    warn "Неверный номер."
+    return 1
+  fi
+  line=$(sed -n "${sel}p" "$listf")
+  tid=$(printf '%s' "$line" | cut -d'|' -f1)
+  tname=$(printf '%s' "$line" | cut -d'|' -f2)
+  [ -n "$tid" ] || { error "Пустой id."; return 1; }
+
+  # 2) детали: локальный json → API detail/export
+  body=""
+  localf="/opt/etc/awg-manager/tunnels/${tid}.json"
+  if [ -f "$localf" ]; then
+    body=$(cat "$localf" 2>/dev/null) || body=""
+    [ -n "$body" ] && info "Источник: $localf"
+  fi
+  if [ -z "$body" ]; then
+    for path in \
+      "tunnels/${tid}" \
+      "tunnels/get?id=${tid}" \
+      "tunnels?id=${tid}" \
+      "export/conf?id=${tid}" \
+      "tunnels/export?id=${tid}"
+    do
+      body=$(curl -sS --connect-timeout 3 --max-time 8 \
+        -H "Authorization: Bearer ${AWG_KEY}" \
+        "${base}/${path}" 2>/dev/null) || body=""
+      case "$body" in
+        *'"jc"'*|*"Jc = "*|*"jc":*)
+          info "Источник: ${base}/${path}"
+          break
+          ;;
+        *) body="" ;;
+      esac
+    done
+  fi
+  if [ -z "$body" ]; then
+    error "Не удалось прочитать конфиг туннеля $tid (нет jc в list; json/API пусты)."
+    return 1
+  fi
+
+  # 3) разобрать Jc/Jmin/Jmax/I1 (JSON или wireguard conf)
+  JC=$(printf '%s' "$body" | sed -n 's/.*"jc"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p;s/.*[Jj]c[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+  JMIN=$(printf '%s' "$body" | sed -n 's/.*"jmin"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p;s/.*[Jj]min[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+  JMAX=$(printf '%s' "$body" | sed -n 's/.*"jmax"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p;s/.*[Jj]max[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+  I1=$(printf '%s' "$body" | sed -n 's/.*"i1"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;s/.*[Ii]1[[:space:]]*=[[:space:]]*\(.*\)/\1/p' | head -1)
+  I1=$(printf '%s' "$I1" | sed 's/\r$//;s/[[:space:]]*$//')
+
+  if [ -z "$JC" ]; then
+    error "В конфиге $tid нет Jc."
+    return 1
+  fi
+
+  save_junk_params "$JC" "$JMIN" "$JMAX" "$I1"
+  info "Из «${tname}» ($tid): jc=$JC jmin=${JMIN:-?} jmax=${JMAX:-?}"
+  [ -n "$I1" ] && info "i1: ${#I1} символов" || warn "i1 пуст"
+  # сразу выбор куда применить (без повторного Y/n)
+  do_apply_junk || true
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# 4) Автоматический поиск junk (find-junk) + apply к conf/туннелю
+# ---------------------------------------------------------------------------
+do_find_junk() {
+  echo
+  info "Автоматический поиск junk-параметров (find-junk)"
+  if ! is_installed; then
+    error "warpscout не установлен. Сначала пункт 1."
+    return 1
+  fi
+  if ! has_account; then
+    error "Нет аккаунта. Сначала пункт 2 (register)."
+    return 1
+  fi
+
+  if load_junk_params; then
+    echo
+    info "Уже есть junk: jc=${JC:-?} jmin=${JMIN:-?} jmax=${JMAX:-?}"
+    echo "  1) Искать заново (find-junk)"
+    echo "  2) Применить сохранённые к conf / туннелю"
+    if is_awg_manager_installed; then
+      echo "  3) Взять из туннеля awg-manager"
+    fi
+    echo "  0) Отмена"
+    echo
+    printf '  %sВыбор:%s ' "$BOLD" "$NC"
+    pre=$(read_choice)
+    echo
+    case "$pre" in
+      0|"") info "Отменено."; return 0 ;;
+      2) do_apply_junk; return $? ;;
+      3) do_junk_from_tunnel; return $? ;;
+      *) ;; # искать
+    esac
+  else
+    # нет сохранённых — можно сразу взять из туннеля
+    if is_awg_manager_installed; then
+      echo
+      echo "  1) Искать (find-junk)"
+      echo "  3) Взять из туннеля awg-manager"
+      echo "  0) Отмена"
+      echo
+      printf '  %sВыбор:%s ' "$BOLD" "$NC"
+      pre=$(read_choice)
+      echo
+      case "$pre" in
+        0|"") info "Отменено."; return 0 ;;
+        3) do_junk_from_tunnel; return $? ;;
+        *) ;; # искать
+      esac
+    fi
+  fi
+
+  echo
+  printf '%s\n' "${BOLD}-gen-i1 профиль:${NC}"
+  echo "  1) random  (по умолчанию)"
+  echo "  2) quic"
+  echo "  3) dns"
+  echo "  4) sip"
+  echo "  5) stun"
+  echo "  0) Отмена"
+  echo
+  printf '  %sВыбор:%s ' "$BOLD" "$NC"
+  sel=$(read_choice)
+  echo
+  case "$sel" in
+    0) info "Отменено."; return 0 ;;
+    2) gen_i1="quic" ;;
+    3) gen_i1="dns" ;;
+    4) gen_i1="sip" ;;
+    5) gen_i1="stun" ;;
+    *) gen_i1="random" ;;
+  esac
+
+  mkdir -p /opt/root "$TMPDIR" 2>/dev/null || true
+  cd /opt/root || true
+  # лог вне TMPDIR — переживает Ctrl+C / trap cleanup
+  logf="$FIND_JUNK_LOG"
+  : > "$logf"
+
+  info "Команда: warpscout find-junk -gen-i1 $gen_i1"
+  info "Долго. Ctrl+C — остановить и взять лучший Attempt из лога."
+  printf '%s\n' "${DIM}Лог: $logf${NC}"
+  echo
+
+  # на время поиска не сносим tmp/лог по INT (только помечаем)
+  FIND_JUNK_INT=0
+  _find_junk_on_int() { FIND_JUNK_INT=1; }
+  trap '_find_junk_on_int' INT
+  rc=0
+  if command -v tee >/dev/null 2>&1; then
+    "$BIN" find-junk -gen-i1 "$gen_i1" 2>&1 | tee "$logf"
+    rc=$?
+  else
+    "$BIN" find-junk -gen-i1 "$gen_i1" >"$logf" 2>&1
+    rc=$?
+    cat "$logf" 2>/dev/null || true
+  fi
+  # вернуть общий trap
+  trap '_cleanup_tmpdir' EXIT INT TERM HUP
+  echo
+
+  FIND_JUNK_SCORE=""
+  if parse_find_junk_log "$logf"; then
+    save_junk_params "$JC" "$JMIN" "$JMAX" "$I1"
+    if [ -n "$FIND_JUNK_SCORE" ]; then
+      if [ "$FIND_JUNK_SCORE" -eq 0 ] 2>/dev/null; then
+        warn "Лучший Attempt: 0 working — набор слабый (jc=$JC jmin=$JMIN jmax=$JMAX)."
+        warn "Лучше п.3 «из туннеля» или продолжить поиск."
+      else
+        info "Лучший набор из лога: jc=$JC jmin=$JMIN jmax=$JMAX (${FIND_JUNK_SCORE} working)"
+      fi
+    else
+      info "Параметры: jc=$JC jmin=$JMIN jmax=$JMAX"
+    fi
+    [ -n "$I1" ] && info "i1 сохранён (${#I1} символов)" || warn "i1 в логе нет (прервано до Ready-to-run) — jc/jmin/jmax всё равно сохранены"
+    info "П.3 (scan) подхватит параметры автоматически."
+    echo
+    if confirm_Y "Применить junk к conf / туннелю сейчас?"; then
+      do_apply_junk || true
+    fi
+  else
+    warn "Не удалось разобрать jc/jmin/jmax из вывода find-junk."
+    [ -f "$logf" ] && printf '%s\n' "${DIM}Лог: $logf${NC}"
+    if [ "$FIND_JUNK_INT" -eq 1 ] || [ "$rc" -ne 0 ]; then
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# 3) Сканирование AWG (+ готовый conf)
+# ---------------------------------------------------------------------------
+do_scan() {
+  echo
+  info "Сканирование адресов (протокол AWG)"
+  if ! is_installed; then
+    error "warpscout не установлен. Сначала пункт 1."
+    return 1
+  fi
+  if ! has_account; then
+    error "Нет аккаунта. Сначала пункт 2 (register)."
+    return 1
+  fi
+
+  mkdir -p /opt/root 2>/dev/null || true
+  cd /opt/root || true
+
+  # Фильтр нод (+ доп. параметры по желанию)
+  SCAN_EXCLUDE_NODE="DME"
+  JC=""; JMIN=""; JMAX=""; I1=""
+  SCAN_GEN_I1=""
+  SCAN_N=3
+  SCAN_FULL=0
+
+  echo
+  printf '%s\n' "${BOLD}Ноды Cloudflare:${NC}"
+  echo "  1) Без DME + быстрый (рекомендуется)"
+  echo "     ${DIM}exclude DME · -n 3 · -gen-i1 random${NC}"
+  echo "  2) Все ноды + быстрый"
+  echo "     ${DIM}-n 3 · -gen-i1 random${NC}"
+  echo "  3) Дополнительные параметры"
+  echo "     ${DIM}junk / I1-профиль / глубина${NC}"
+  echo "  0) Отмена"
+  echo
+  printf '  %sВыбор [1]:%s ' "$BOLD" "$NC"
+  _nsel=$(read_choice)
+  echo
+  case "$_nsel" in
+    0) info "Отменено."; return 0 ;;
+    ""|1)
+      SCAN_EXCLUDE_NODE="DME"
+      SCAN_GEN_I1="random"
+      SCAN_N=3
+      SCAN_FULL=0
+      info "Без DME · быстрый (-n 3) · -gen-i1 random"
+      ;;
+    2)
+      SCAN_EXCLUDE_NODE=""
+      SCAN_GEN_I1="random"
+      SCAN_N=3
+      SCAN_FULL=0
+      info "Все ноды · быстрый (-n 3) · -gen-i1 random"
+      ;;
+    3)
+      # --- доп. параметры: всегда без DME ---
+      SCAN_EXCLUDE_NODE="DME"
+      info "Фильтр: без DME (по умолчанию)."
+
+      # junk
+      echo
+      printf '%s\n' "${BOLD}Параметры junk (Jc/Jmin/Jmax/I1):${NC}"
+      echo "  1) Дефолты warpscout (без своих)"
+      if load_junk_params; then
+        echo "  2) Из файла (п.4): jc=${JC:-?} jmin=${JMIN:-?} jmax=${JMAX:-?}"
+      else
+        printf '  %s2) Из файла (п.4)%s  %s— нет warpscout-junk.env%s\n' "$DIM" "$NC" "$DIM" "$NC"
+      fi
+      if is_awg_manager_installed; then
+        echo "  3) Взять из рабочего туннеля awg-manager"
+      else
+        printf '  %s3) Из туннеля awg-manager%s  %s(нет awg-manager)%s\n' "$DIM" "$NC" "$DIM" "$NC"
+      fi
+      echo "  0) Отмена"
+      echo
+      printf '  %sВыбор [1]:%s ' "$BOLD" "$NC"
+      _jsel=$(read_choice)
+      echo
+      case "$_jsel" in
+        0) info "Отменено."; return 0 ;;
+        ""|1)
+          JC=""; JMIN=""; JMAX=""; I1=""
+          info "Junk: дефолты warpscout."
+          ;;
+        2)
+          if ! load_junk_params; then
+            error "Нет сохранённых junk (сначала п.4 find-junk)."
+            return 1
+          fi
+          info "Junk: из файла (jc=$JC jmin=$JMIN jmax=$JMAX)."
+          ;;
+        3)
+          if ! is_awg_manager_installed; then
+            error "awg-manager не установлен."
+            return 1
+          fi
+          if ! pick_junk_from_tunnel_menu; then
+            return 1
+          fi
+          ;;
+        *) warn "Неверный выбор."; return 1 ;;
+      esac
+
+      # -gen-i1: по умолчанию random (если нет готового I1 из junk)
+      if [ -z "$I1" ]; then
+        echo
+        printf '%s\n' "${BOLD}Профиль I1 (-gen-i1):${NC}"
+        echo "  1) random"
+        echo "  2) quic"
+        echo "  3) dns"
+        echo "  4) sip"
+        echo "  5) stun"
+        echo "  0) Отмена"
+        echo
+        printf '  %sВыбор [1]:%s ' "$BOLD" "$NC"
+        _isel=$(read_choice)
+        echo
+        case "$_isel" in
+          0) info "Отменено."; return 0 ;;
+          ""|1) SCAN_GEN_I1="random"; info "I1: -gen-i1 random" ;;
+          2) SCAN_GEN_I1="quic"; info "I1: -gen-i1 quic" ;;
+          3) SCAN_GEN_I1="dns"; info "I1: -gen-i1 dns" ;;
+          4) SCAN_GEN_I1="sip"; info "I1: -gen-i1 sip" ;;
+          5) SCAN_GEN_I1="stun"; info "I1: -gen-i1 stun" ;;
+          *) warn "Неверный выбор."; return 1 ;;
+        esac
+      else
+        info "I1 уже задан из junk — -gen-i1 не нужен."
+      fi
+
+      # глубина
+      echo
+      printf '%s\n' "${BOLD}Глубина скана:${NC}"
+      echo "  1) Быстрый  (-n 3)"
+      echo "  2) Обычный  (-n 5)"
+      echo "  3) Полный   (-full)"
+      echo "  0) Отмена"
+      echo
+      printf '  %sВыбор [1]:%s ' "$BOLD" "$NC"
+      _dsel=$(read_choice)
+      echo
+      case "$_dsel" in
+        0) info "Отменено."; return 0 ;;
+        ""|1) SCAN_N=3; SCAN_FULL=0; info "Глубина: быстрый (-n 3)." ;;
+        2) SCAN_N=5; SCAN_FULL=0; info "Глубина: обычный (-n 5)." ;;
+        3) SCAN_N=""; SCAN_FULL=1; info "Глубина: полный (-full)." ;;
+        *) warn "Неверный выбор."; return 1 ;;
+      esac
+      ;;
+    *)
+      warn "Неверный выбор."
+      return 1
+      ;;
+  esac
+
+  set -- scan -p awg -P -o "$SCAN_OUT" -conf "$CONF_OUT"
+  if [ -n "$SCAN_EXCLUDE_NODE" ]; then
+    set -- "$@" -exclude-node "$SCAN_EXCLUDE_NODE"
+  fi
+  if [ "$SCAN_FULL" = "1" ]; then
+    set -- "$@" -full
+  elif [ -n "$SCAN_N" ]; then
+    set -- "$@" -n "$SCAN_N"
+  fi
+  if [ -n "$SCAN_GEN_I1" ]; then
+    set -- "$@" -gen-i1 "$SCAN_GEN_I1"
+  fi
+  if [ -n "$JC" ] || [ -n "$I1" ]; then
+    [ -n "$JC" ] && set -- "$@" -jc "$JC"
+    [ -n "$JMIN" ] && set -- "$@" -jmin "$JMIN"
+    [ -n "$JMAX" ] && set -- "$@" -jmax "$JMAX"
+    [ -n "$I1" ] && set -- "$@" -i1 "$I1"
+  fi
+
+  info "Команда: warpscout $*"
+  info "Это может занять несколько минут..."
+  echo
+
+  if ! "$BIN" "$@"; then
+    error "scan завершился с ошибкой."
+    return 1
+  fi
+
+  if [ -f "$SCAN_OUT" ] && [ -s "$SCAN_OUT" ]; then
+    n=$(wc -l < "$SCAN_OUT" 2>/dev/null | tr -d ' ')
+    info "Отчёт: $SCAN_OUT (${n:-?} строк)"
+  else
+    warn "Файл отчёта пуст или не создан: $SCAN_OUT"
+  fi
+
+  if has_conf; then
+    ensure_conf_keenetic_fields "$CONF_OUT" || true
+    info "Конфиг лучшего эндпоинта: $CONF_OUT"
+    printf '%s\n' "${DIM}--- начало conf ---${NC}"
+    head -n 40 "$CONF_OUT" 2>/dev/null || true
+    printf '%s\n' "${DIM}--- конец (первые 40 строк) ---${NC}"
+  else
+    warn "Конфиг не создан: $CONF_OUT"
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# 5) Применить conf в awg-manager
+# ---------------------------------------------------------------------------
+awg_port() {
+  p=""
+  if [ -f "$AWG_SETTINGS" ]; then
+    p=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$AWG_SETTINGS" 2>/dev/null | head -1)
+  fi
+  [ -n "$p" ] || p=2222
+  printf '%s\n' "$p"
+}
+
+awg_api_base() {
+  printf 'http://127.0.0.1:%s/api' "$(awg_port)"
+}
+
+# Достаём API-ключ в AWG_KEY (глобально).
+# Промпты только в stderr — иначе key=$(...) глотает вывод и «зависает».
+# Только settings.json / .api_key — без интерактивного запроса (для фоновых проверок).
+# Уже заданный AWG_KEY в сессии не сбрасываем.
+awg_load_api_key_quiet() {
+  if [ -n "$AWG_KEY" ]; then
+    return 0
+  fi
+  AWG_KEY=""
+  if [ -f "$AWG_SETTINGS" ]; then
+    for field in apiKey api_key ApiKey APIKey; do
+      AWG_KEY=$(sed -n "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$AWG_SETTINGS" 2>/dev/null | head -1)
+      [ -n "$AWG_KEY" ] && break
+    done
+  fi
+  if [ -z "$AWG_KEY" ] && [ -f "$AWG_API_KEY_FILE" ]; then
+    AWG_KEY=$(tr -d '\r\n' < "$AWG_API_KEY_FILE" 2>/dev/null)
+  fi
+  [ -n "$AWG_KEY" ]
+}
+
+awg_load_api_key() {
+  if awg_load_api_key_quiet; then
+    return 0
+  fi
+  printf '%s\n' "${YELLOW}[?]${NC} API-ключ awg-manager (Настройки → Расширенные → API Key):" >&2
+  printf '    ' >&2
+  AWG_KEY=$(read_choice)
+  printf '\n' >&2
+  if [ -n "$AWG_KEY" ]; then
+    mkdir -p /opt/etc/awg-manager 2>/dev/null || true
+    printf '%s\n' "$AWG_KEY" > "$AWG_API_KEY_FILE" 2>/dev/null || true
+    chmod 600 "$AWG_API_KEY_FILE" 2>/dev/null || true
+    info "Ключ сохранён в $AWG_API_KEY_FILE" >&2
+  fi
+  [ -n "$AWG_KEY" ]
+}
+
+# Список туннелей → файл: id|name|status|endpoint
+# Ответ: {"success":true,"data":[{...},...]}
+awg_list_tunnels() {
+  _lt_base="$1"
+  _lt_key="$2"
+  _lt_out="$3"
+  : > "$_lt_out"
+  if ! command -v curl >/dev/null 2>&1; then
+    error "Нужен curl для API awg-manager."
+    return 1
+  fi
+
+  # -sS: без прогресса; жёсткие таймауты; без -f (чтобы увидеть тело при 401)
+  _lt_resp=$(curl -sS --connect-timeout 3 --max-time 10 \
+    -H "Authorization: Bearer ${_lt_key}" \
+    "${_lt_base}/tunnels/list" 2>/dev/null) || _lt_resp=""
+
+  if [ -z "$_lt_resp" ]; then
+    error "Пустой ответ от ${_lt_base}/tunnels/list"
+    error "Проверьте, что awg-manager запущен и API-ключ верный."
+    return 1
+  fi
+  case "$_lt_resp" in
+    *'"success":false'*|*'"success": false'*)
+      err=$(printf '%s' "$_lt_resp" | sed -n 's/.*"error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+      error "API: ${err:-ошибка}"
+      return 1
+      ;;
+  esac
+
+  # Разбиваем JSON по «{» → файл кусков (не в переменную shell)
+  _lt_chunks="$_lt_out.chunks"
+  printf '%s' "$_lt_resp" | tr '{' '\n' > "$_lt_chunks" 2>/dev/null || true
+  : > "$_lt_out"
+  _cnt=0
+  while IFS= read -r chunk || [ -n "$chunk" ]; do
+    case "$chunk" in
+      *'"id"'*)
+        tid=$(printf '%s' "$chunk" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        [ -n "$tid" ] || continue
+        case "$tid" in
+          awg*|wg*|tun*) ;;
+          *) continue ;;
+        esac
+        tstat=$(printf '%s' "$chunk" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        [ -n "$tstat" ] || continue
+        tname=$(printf '%s' "$chunk" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        tend=$(printf '%s' "$chunk" | sed -n 's/.*"endpoint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        taddr=$(printf '%s' "$chunk" | sed -n 's/.*"address"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        taddr_v4=$(printf '%s' "$taddr" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | \
+          sed -n 's|^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\(/[0-9]*\)\{0,1\}$|\1|p' | head -1)
+        tifc=$(printf '%s' "$chunk" | sed -n 's/.*"interfaceName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        tndms=$(printf '%s' "$chunk" | sed -n 's/.*"ndmsName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        # id|name|status|endpoint|ipv4|iface|ndms
+        printf '%s|%s|%s|%s|%s|%s|%s\n' "$tid" "${tname:-?}" "${tstat:-?}" "${tend:-}" "${taddr_v4:-}" "${tifc:-}" "${tndms:-}" >> "$_lt_out"
+        _cnt=$((_cnt + 1))
+        [ "$_cnt" -ge 64 ] && break
+        ;;
+    esac
+  done < "$_lt_chunks"
+  rm -f "$_lt_chunks" 2>/dev/null || true
+  [ -s "$_lt_out" ]
+}
+
+# IPv4 из строки Address conf (без /prefix)
+awg_conf_ipv4() {
+  conf="$1"
+  grep -iE '^[[:space:]]*Address[[:space:]]*=' "$conf" 2>/dev/null | head -1 | \
+    sed 's/^[^=]*=[[:space:]]*//' | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | \
+    sed -n 's|^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\(/[0-9]*\)\{0,1\}$|\1|p' | head -1
+}
+
+# Подставить Address = IP/32 в conf (сохраняя остальное)
+awg_patch_conf_address() {
+  conf="$1"
+  newip="$2"
+  [ -f "$conf" ] || return 1
+  [ -n "$newip" ] || return 1
+  tmp="$conf.addrnew"
+  if grep -qiE '^[[:space:]]*Address[[:space:]]*=' "$conf" 2>/dev/null; then
+    # заменяем только первый IPv4 в значении; префикс /32 если был или по умолчанию
+    sed -E "s|^([[:space:]]*[Aa][Dd][Dd][Rr][Ee][Ss][Ss][[:space:]]*=[[:space:]]*)[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?|\1${newip}/32|" \
+      "$conf" > "$tmp" 2>/dev/null || return 1
+  else
+    # добавить в [Interface]
+    if grep -q '^\[Interface\]' "$conf" 2>/dev/null; then
+      awk -v ip="$newip" '
+        BEGIN { done=0 }
+        /^\[Interface\]/ { inif=1 }
+        inif && /^\[/ && !/^\[Interface\]/ {
+          if (!done) { print "Address = " ip "/32"; done=1 }
+          inif=0
+        }
+        { print }
+        END { if (!done) print "Address = " ip "/32" }
+      ' "$conf" > "$tmp" 2>/dev/null || return 1
+    else
+      { printf 'Address = %s/32\n' "$newip"; cat "$conf"; } > "$tmp" || return 1
+    fi
+  fi
+  mv -f "$tmp" "$conf" || return 1
+  return 0
+}
+
+# --- RCI cache: один curl на операцию, без повторных дампов ---
+# Файлы: $TMPDIR/rci-ifaces.json  $TMPDIR/rci-ifaces.min
+rci_cache_invalidate() {
+  rm -f "$TMPDIR/rci-ifaces.json" "$TMPDIR/rci-ifaces.min" 2>/dev/null || true
+}
+
+# Обновить кэш при необходимости. Печатает путь к .min (одна строка JSON).
+rci_cache_min() {
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+  _rj="$TMPDIR/rci-ifaces.json"
+  _rm="$TMPDIR/rci-ifaces.min"
+  if [ ! -s "$_rm" ]; then
+    if command -v curl >/dev/null 2>&1; then
+      curl -sS --connect-timeout 2 --max-time 5 \
+        "http://127.0.0.1:79/rci/show/interface" > "$_rj" 2>/dev/null || true
+    fi
+    if [ -s "$_rj" ]; then
+      tr -d '\n\r' < "$_rj" | sed 's/[[:space:]]\+/ /g' > "$_rm" 2>/dev/null || cp -f "$_rj" "$_rm"
+    else
+      : > "$_rm"
+    fi
+  fi
+  printf '%s' "$_rm"
+}
+
+# Блок одного WireguardN из minify-JSON (ключ верхнего уровня, не peer).
+_rci_wg_block() {
+  _rmf="$1"
+  _wgn="$2"
+  [ -s "$_rmf" ] && [ -n "$_wgn" ] || return 1
+  awk -v n="\"$_wgn\":" '
+    BEGIN { RS="" }
+    {
+      i = index($0, n)
+      if (i < 1) next
+      s = substr($0, i)
+      if (match(s, /},[[:space:]]*"Wireguard[0-9]+":/))
+        s = substr(s, 1, RSTART)
+      else if (match(s, /},[[:space:]]*"ZeroTier/))
+        s = substr(s, 1, RSTART)
+      else if (match(s, /},[[:space:]]*"Proxy/))
+        s = substr(s, 1, RSTART)
+      else if (match(s, /},[[:space:]]*"OpkgTun/))
+        s = substr(s, 1, RSTART)
+      print s
+      exit
+    }
+  ' "$_rmf"
+}
+
+# Адреса системных Wireguard* из RCI-кэша → файл: id|description|ipv4
+rci_wireguard_addrs() {
+  _rwa_out="$1"
+  : > "$_rwa_out"
+  _rm=$(rci_cache_min)
+  [ -s "$_rm" ] || return 1
+  _names=$(grep -oE '"Wireguard[0-9]+"' "$_rm" 2>/dev/null | tr -d '"' | sort -u)
+  for _id in $_names; do
+    case "$_id" in Wireguard[0-9]*) ;; *) continue ;; esac
+    _blk=$(_rci_wg_block "$_rm" "$_id") || continue
+    [ -n "$_blk" ] || continue
+    _addr=$(printf '%s' "$_blk" | grep -oE '"address"[[:space:]]*:[[:space:]]*"[0-9.]+"' | head -1 | \
+      sed -n 's/.*"\([0-9.]*\)".*/\1/p')
+    [ -n "$_addr" ] || continue
+    _desc=$(printf '%s' "$_blk" | grep -oE '"description"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | \
+      sed -n 's/.*"\([^"]*\)".*/\1/p')
+    printf '%s|%s|%s\n' "$_id" "${_desc:-$_id}" "$_addr" >> "$_rwa_out"
+  done
+  [ -s "$_rwa_out" ]
+}
+
+# Если IPv4 conf занят другими туннелями (awg-manager + системные Wireguard)
+# кроме skip_id — взять свободный 172.16.0.x
+# listf: id|name|status|endpoint|ipv4|iface|ndms
+awg_ensure_free_address() {
+  conf="$1"
+  listf="$2"
+  skip_id="${3:-}"
+
+  # Исключаем только интерфейсы заменяемого туннеля (не «тот же IP»)
+  skip_ndms=""
+  skip_ifc=""
+  skip_cur=""
+  if [ -n "$skip_id" ] && [ -s "$listf" ]; then
+    while IFS='|' read -r _aid _aname _astat _aend _aaddr _aifc _andms || [ -n "$_aid" ]; do
+      if [ "$_aid" = "$skip_id" ]; then
+        skip_cur="$_aaddr"
+        skip_ndms="$_andms"
+        skip_ifc="$_aifc"
+        case "$skip_ifc" in
+          *'|'*) skip_ifc=$(printf '%s' "$skip_ifc" | cut -d'|' -f1) ;;
+        esac
+        break
+      fi
+    done < "$listf"
+  fi
+
+  # При replace: сначала берём УЖЕ назначенный адрес туннеля (не из conf scan)
+  if [ -n "$skip_cur" ]; then
+    conf_cur=$(awg_conf_ipv4 "$conf")
+    if [ -n "$conf_cur" ] && [ "$conf_cur" != "$skip_cur" ]; then
+      info "Туннель $skip_id уже с Address $skip_cur — оставляем (в conf было $conf_cur)."
+      awg_patch_conf_address "$conf" "$skip_cur" 2>/dev/null || true
+      if [ "$conf" != "$CONF_OUT" ] && [ -f "$CONF_OUT" ]; then
+        awg_patch_conf_address "$CONF_OUT" "$skip_cur" 2>/dev/null || true
+      fi
+    fi
+    cur="$skip_cur"
+  else
+    cur=$(awg_conf_ipv4 "$conf")
+  fi
+
+  if [ -z "$cur" ]; then
+    warn "В conf нет Address (IPv4) — пропускаем проверку конфликта."
+    return 0
+  fi
+
+  usedf="$TMPDIR/used-addr.txt"
+  used_src="$TMPDIR/used-addr-src.txt"
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+  : > "$usedf"
+  : > "$used_src"
+
+  _used_add() {
+    # _used_add IP SRC
+    [ -n "$1" ] || return 0
+    printf '%s\n' "$1" >> "$usedf"
+    printf '%s|%s\n' "$1" "$2" >> "$used_src"
+  }
+
+  # 1) awg-manager tunnels
+  if [ -s "$listf" ]; then
+    while IFS='|' read -r _aid _aname _astat _aend _aaddr _aifc _andms || [ -n "$_aid" ]; do
+      [ -n "$_aaddr" ] || continue
+      if [ -n "$skip_id" ] && [ "$_aid" = "$skip_id" ]; then
+        continue
+      fi
+      _used_add "$_aaddr" "awg-manager ${_aid} (${_aname:-?})"
+    done < "$listf"
+  fi
+
+  # 2) RCI Wireguard* — кроме NDMS текущего туннеля
+  rcif="$TMPDIR/rci-wg-addr.txt"
+  if rci_wireguard_addrs "$rcif" 2>/dev/null; then
+    while IFS='|' read -r rid rname raddr || [ -n "$rid" ]; do
+      if [ -z "$raddr" ] && [ -n "$rname" ]; then
+        raddr="$rname"; rname="$rid"; rid=""
+      fi
+      [ -n "$raddr" ] || continue
+      if [ -n "$skip_ndms" ] && { [ "$rid" = "$skip_ndms" ] || [ "$rname" = "$skip_ndms" ]; }; then
+        continue
+      fi
+      _used_add "$raddr" "RCI ${rname:-$rid}"
+    done < "$rcif"
+  fi
+
+  # 3) Живые адреса nwg*/Wireguard*/awg* (ip addr) — UI/RCI могут расходиться
+  for _path in /sys/class/net/nwg* /sys/class/net/Wireguard* /sys/class/net/wireguard* /sys/class/net/awg*; do
+    [ -e "$_path" ] || continue
+    _bif=$(basename "$_path")
+    if [ -n "$skip_ifc" ] && [ "$_bif" = "$skip_ifc" ]; then
+      continue
+    fi
+    if [ -n "$skip_ndms" ] && [ "$_bif" = "$skip_ndms" ]; then
+      continue
+    fi
+    _a=""
+    if command -v ip >/dev/null 2>&1; then
+      _a=$(ip -4 -o addr show dev "$_bif" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+    fi
+    if [ -z "$_a" ] && command -v ifconfig >/dev/null 2>&1; then
+      _a=$(ifconfig "$_bif" 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p;s/.*inet \([0-9.]*\).*/\1/p' | head -1)
+    fi
+    [ -n "$_a" ] || continue
+    _used_add "$_a" "iface ${_bif}"
+  done
+
+  conflict=0
+  conflict_src=""
+  if grep -qxF "$cur" "$usedf" 2>/dev/null; then
+    conflict=1
+    conflict_src=$(grep -F "${cur}|" "$used_src" 2>/dev/null | head -1 | cut -d'|' -f2-)
+  fi
+
+  if [ "$conflict" != "1" ]; then
+    info "Address $cur оставляем (не занят другими)."
+    return 0
+  fi
+  warn "Адрес $cur занят: ${conflict_src:-?} — ищем свободный."
+
+  free=""
+  n=2
+  while [ "$n" -le 254 ]; do
+    cand="172.16.0.$n"
+    if ! grep -qxF "$cand" "$usedf" 2>/dev/null; then
+      free="$cand"
+      break
+    fi
+    n=$((n + 1))
+  done
+
+  if [ -z "$free" ]; then
+    error "Нет свободного адреса в 172.16.0.0/24"
+    return 1
+  fi
+
+  if awg_patch_conf_address "$conf" "$free"; then
+    info "Address: $cur → $free"
+    if [ "$conf" != "$CONF_OUT" ] && [ -f "$CONF_OUT" ]; then
+      awg_patch_conf_address "$CONF_OUT" "$free" 2>/dev/null || true
+    fi
+    return 0
+  fi
+  error "Не удалось записать Address = $free"
+  return 1
+}
+
+
+# Быстрый разбор list (один awk):
+#   best_out  → NODE|ENDPOINT|TUN_PING|LOSS|LOCATION
+#   extra_out → NODE|ENDPOINT|TUN_PING|LOSS|LOCATION|SLASH24  (≤2 разных /24 на ноду)
+# $1=list $2=best_out $3=extra_out
+# Важно: в list сначала основная таблица, best-per-node — в конце.
+awg_parse_list_endpoints() {
+  list="$1"
+  best_out="$2"
+  extra_out="$3"
+  : > "$best_out"
+  : > "$extra_out"
+  [ -f "$list" ] || return 1
+
+  awk -v best_out="$best_out" -v extra_out="$extra_out" '
+  function slash24(ep,  ip, n, a) {
+    ip = ep; sub(/:.*/, "", ip)
+    n = split(ip, a, ".")
+    if (n != 4) return ""
+    return a[1] "." a[2] "." a[3] ".0/24"
+  }
+  BEGIN { in_main = 0; in_best = 0; nb = 0; cand_n = 0 }
+  /Best endpoint per node/ { in_best = 1; in_main = 0; next }
+  /^ENDPOINT[[:space:]]/ && /PING/ { if (!in_best) in_main = 1; next }
+  /^#/ || /^[[:space:]]*$/ { next }
+  /^NODE[[:space:]]/ { next }
+
+  in_best {
+    node = $1; ep = $2
+    if (ep !~ /:/) next
+    tunp = "?"; loss = "?"; loc = ""
+    nms = 0
+    for (i = 3; i <= NF; i++) {
+      if ($i ~ /ms$/) {
+        nms++
+        if (nms == 2) tunp = $i
+      } else if ($i ~ /%$/) {
+        loss = $i
+        loc = ""
+        for (j = i + 2; j <= NF; j++)
+          loc = (loc == "" ? $j : loc " " $j)
+        break
+      }
+    }
+    nb++
+    best_node[nb] = node; best_ep[nb] = ep
+    best_tun[nb] = tunp; best_loss[nb] = loss; best_loc[nb] = loc
+    taken_ep[ep] = 1
+    node_ok[node] = 1
+    next
+  }
+
+  # основную таблицу только копим — фильтр по node_ok в END (best ещё не прочитан)
+  in_main {
+    ep = $1
+    if (ep !~ /:/) next
+    tunp = "?"; loss = "?"; node = ""; loc = ""
+    nms = 0
+    for (i = 2; i <= NF; i++) {
+      if ($i ~ /ms$/) {
+        nms++
+        if (nms == 2) tunp = $i
+      } else if ($i ~ /%$/) {
+        loss = $i
+        node = $(i + 2)
+        loc = ""
+        for (j = i + 3; j <= NF; j++)
+          loc = (loc == "" ? $j : loc " " $j)
+        break
+      }
+    }
+    if (node == "") next
+    s24 = slash24(ep)
+    if (s24 == "") next
+    lossn = loss; gsub(/[^0-9]/, "", lossn); if (lossn == "") lossn = 100
+    tunpn = tunp; gsub(/[^0-9]/, "", tunpn); if (tunpn == "") tunpn = 999
+    cand_n++
+    cand_node[cand_n] = node
+    cand_ep[cand_n] = ep
+    cand_tun[cand_n] = tunp
+    cand_loss[cand_n] = loss
+    cand_loc[cand_n] = loc
+    cand_s24[cand_n] = s24
+    cand_lossn[cand_n] = lossn + 0
+    cand_tunpn[cand_n] = tunpn + 0
+  }
+
+  END {
+    for (i = 1; i <= nb; i++)
+      printf "%s|%s|%s|%s|%s\n", best_node[i], best_ep[i], best_tun[i], best_loss[i], best_loc[i] > best_out
+    close(best_out)
+
+    if (cand_n < 1 || nb < 1) exit 0
+    for (i = 1; i <= cand_n; i++) ord[i] = i
+    for (i = 2; i <= cand_n; i++) {
+      v = ord[i]
+      j = i - 1
+      while (j >= 1) {
+        a = ord[j]
+        if (cand_node[a] < cand_node[v]) break
+        if (cand_node[a] == cand_node[v] && cand_lossn[a] < cand_lossn[v]) break
+        if (cand_node[a] == cand_node[v] && cand_lossn[a] == cand_lossn[v] && cand_tunpn[a] <= cand_tunpn[v]) break
+        ord[j + 1] = a
+        j--
+      }
+      ord[j + 1] = v
+    }
+    for (k = 1; k <= cand_n; k++) {
+      i = ord[k]
+      node = cand_node[i]
+      ep = cand_ep[i]
+      s24 = cand_s24[i]
+      if (!(node in node_ok)) continue
+      if (ep in taken_ep) continue
+      if (cnt[node] >= 2) continue
+      if ((node SUBSEP s24) in used24) continue
+      used24[node SUBSEP s24] = 1
+      cnt[node]++
+      printf "%s|%s|%s|%s|%s|%s\n", node, ep, cand_tun[i], cand_loss[i], cand_loc[i], s24 > extra_out
+    }
+    close(extra_out)
+  }
+  ' "$list" || return 1
+
+  [ -s "$best_out" ]
+}
+
+# Выбор endpoint: best-per-node + до 2 доп. /24 на ноду. SELECTED_EP, SELECTED_NODE
+awg_pick_endpoint() {
+  SELECTED_EP=""
+  SELECTED_NODE=""
+  bestf="$TMPDIR/best-ep.txt"
+  extraf="$TMPDIR/extra-ep.txt"
+  menuf="$TMPDIR/ep-menu.txt"
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+  : > "$menuf"
+
+  if [ ! -f "$SCAN_OUT" ] || [ ! -s "$SCAN_OUT" ]; then
+    error "Нет списка: $SCAN_OUT (сначала п. 3)."
+    return 1
+  fi
+  if ! awg_parse_list_endpoints "$SCAN_OUT" "$bestf" "$extraf"; then
+    error "Не удалось разобрать list: $SCAN_OUT"
+    return 1
+  fi
+
+  echo
+  # Двухстрочный формат — не ломается на узком экране телефона
+  printf '%s\n' "${BOLD}Лучший endpoint по нодам:${NC}"
+  i=0
+  while IFS='|' read -r node ep tunp loss loc || [ -n "$node" ]; do
+    [ -n "$node" ] || continue
+    i=$((i + 1))
+    mark=""
+    case "$node" in
+      DME) mark="${YELLOW}DPI${NC}" ;;
+    esac
+    printf '  %s%d)%s %s%s%s  %s\n' "$BOLD" "$i" "$NC" "$CYAN" "$node" "$NC" "$ep"
+    printf '      %s%s · loss %s%s' "$DIM" "$tunp" "$loss" "$NC"
+    [ -n "$loc" ] && printf ' · %s' "$loc"
+    [ -n "$mark" ] && printf ' · %s' "$mark"
+    printf '\n'
+    printf '%s|%s\n' "$node" "$ep" >> "$menuf"
+  done < "$bestf"
+
+  if [ -s "$extraf" ]; then
+    echo
+    printf '%s\n' "${BOLD}Доп. точки:${NC}"
+    while IFS='|' read -r node ep tunp loss loc s24 || [ -n "$node" ]; do
+      [ -n "$ep" ] || continue
+      i=$((i + 1))
+      mark=""
+      case "$node" in
+        DME) mark="${YELLOW}DPI${NC}" ;;
+      esac
+      printf '  %s%d)%s %s%s%s  %s\n' "$BOLD" "$i" "$NC" "$CYAN" "$node" "$NC" "$ep"
+      printf '      %s%s · loss %s%s' "$DIM" "$tunp" "$loss" "$NC"
+      [ -n "$loc" ] && printf ' · %s' "$loc"
+      [ -n "$mark" ] && printf ' · %s' "$mark"
+      printf '\n'
+      printf '%s|%s\n' "$node" "$ep" >> "$menuf"
+    done < "$extraf"
+  fi
+
+  # текущий Endpoint из conf
+  cur=$(grep -iE '^[[:space:]]*Endpoint[[:space:]]*=' "$CONF_OUT" 2>/dev/null | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  if [ -n "$cur" ]; then
+    echo
+    printf '%s\n' "${DIM}сейчас в conf:${NC} $cur"
+  fi
+
+  echo "  0) Отмена"
+  echo
+  printf '  %sВыбор endpoint:%s ' "$BOLD" "$NC"
+  sel=$(read_choice)
+  echo
+
+  case "$sel" in
+    0|"") info "Отменено."; return 1 ;;
+    *[!0-9]*) warn "Неверный выбор."; return 1 ;;
+  esac
+  if [ "$sel" -lt 1 ] || [ "$sel" -gt "$i" ]; then
+    warn "Неверный номер."; return 1
+  fi
+
+  SELECTED_NODE=$(sed -n "${sel}p" "$menuf" | cut -d'|' -f1)
+  SELECTED_EP=$(sed -n "${sel}p" "$menuf" | cut -d'|' -f2)
+  if [ -z "$SELECTED_EP" ]; then
+    error "Пустой endpoint."
+    return 1
+  fi
+  info "Выбрано: $SELECTED_NODE → $SELECTED_EP"
+  return 0
+}
+
+# Подставить Endpoint в conf → dest (остальное без изменений)
+awg_patch_conf_endpoint() {
+  src="$1"
+  dest="$2"
+  ep="$3"
+  [ -f "$src" ] || return 1
+  [ -n "$ep" ] || return 1
+
+  if grep -qiE '^[[:space:]]*Endpoint[[:space:]]*=' "$src" 2>/dev/null; then
+    # сохраняем отступ и регистр ключа
+    sed -E "s|^([[:space:]]*[Ee][Nn][Dd][Pp][Oo][Ii][Nn][Tt][[:space:]]*=[[:space:]]*).*$|\1${ep}|" \
+      "$src" > "$dest" 2>/dev/null || return 1
+  else
+    # добавить в конец секции [Peer], иначе в конец файла
+    if grep -q '^\[Peer\]' "$src" 2>/dev/null; then
+      awk -v ep="$ep" '
+        BEGIN { done=0 }
+        /^\[Peer\]/ { inpeer=1 }
+        inpeer && /^\[/ && !/^\[Peer\]/ {
+          if (!done) { print "Endpoint = " ep; done=1 }
+          inpeer=0
+        }
+        { print }
+        END { if (!done) print "Endpoint = " ep }
+      ' "$src" > "$dest" 2>/dev/null || return 1
+    else
+      { cat "$src"; printf '\nEndpoint = %s\n' "$ep"; } > "$dest" || return 1
+    fi
+  fi
+  # обновить и основной conf на диске
+  cp -f "$dest" "$src" 2>/dev/null || true
+  return 0
+}
+
+
+# Старт/рестарт туннеля через API (после replace, если был stopped — API сам не поднимает)
+awg_control() {
+  # awg_control start|stop|restart ID
+  action="$1"
+  tid="$2"
+  key="$3"
+  base="$4"
+  [ -n "$tid" ] || return 1
+  resp=$(curl -sS --connect-timeout 5 --max-time 30 \
+    -X POST "${base}/control/${action}?id=${tid}" \
+    -H "Authorization: Bearer ${key}" \
+    -H "Content-Type: application/json" \
+    -d '{}' 2>/dev/null) || resp=""
+  if awg_api_ok "$resp"; then
+    info "control/${action} id=${tid}: OK"
+    return 0
+  fi
+  err=$(printf '%s' "$resp" | sed -n 's/.*"error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  [ -z "$err" ] && err=$(printf '%s' "$resp" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  warn "control/${action} id=${tid}: ${err:-fail}"
+  [ -n "$resp" ] && printf '%s\n' "${DIM}$resp${NC}" | head -c 300 && echo
+  return 1
+}
+
+
+# ---------------------------------------------------------------------------
+# Системный WireGuard (Keenetic NDMS / ndmc)
+# ---------------------------------------------------------------------------
+
+# Запись матчей: name|WireguardN, link|…, addr|IP, desc|имя, ep|WireguardN|host:port
+_awg_managed_link() {
+  _out="$1"
+  _wg="$2"
+  _tname="$3"
+  _addr="$4"
+  _ep="${5:-}"
+  case "$_wg" in
+    Wireguard[0-9]*|WireGuard[0-9]*)
+      printf 'name|%s\n' "$_wg" >> "$_out"
+      if [ -n "$_tname" ] && [ "$_tname" != "?" ]; then
+        printf 'link|%s|%s\n' "$_wg" "$_tname" >> "$_out"
+        printf 'desc|%s\n' "$_tname" >> "$_out"
+      fi
+      if [ -n "$_ep" ]; then
+        printf 'ep|%s|%s\n' "$_wg" "$_ep" >> "$_out"
+      fi
+      ;;
+  esac
+  if [ -n "$_addr" ]; then
+    printf 'addr|%s\n' "$_addr" >> "$_out"
+  fi
+}
+
+# Интерфейсы awg-manager → файл для пометки.
+# Только API /tunnels/list (1 запрос).
+# ВАЖНО: не использовать имя out — awg_list_tunnels() делает out="$3"
+# и в ash нет local → затирает путь. Метки уходили в tunnels.txt, managed=0 байт.
+awg_managed_ndms_file() {
+  _managed_out="$1"
+  : > "$_managed_out"
+  is_awg_manager_installed || return 1
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+
+  awg_load_api_key_quiet || return 1
+  _mbase=$(awg_api_base)
+  _tun_tmp="$TMPDIR/awg-managed-tunnels.txt"
+  : > "$_tun_tmp"
+
+  # один запрос → id|name|status|endpoint|addr|ifc|ndms
+  if ! awg_list_tunnels "$_mbase" "$AWG_KEY" "$_tun_tmp" >/dev/null 2>&1; then
+    return 1
+  fi
+  [ -s "$_tun_tmp" ] || return 1
+
+  _n=0
+  while IFS='|' read -r _tid tname _tstat _tend taddr tifc tndms || [ -n "$_tid" ]; do
+    [ -n "$_tid" ] || continue
+    case "$_tid" in
+      awg*|wg*|tun*) ;;
+      *) continue ;;
+    esac
+    _n=$((_n + 1))
+    [ "$_n" -gt 64 ] && break
+
+    _wg="$tndms"
+    case "$_wg" in
+      Wireguard[0-9]*|WireGuard[0-9]*) ;;
+      *) _wg="" ;;
+    esac
+    _awg_managed_link "$_managed_out" "$_wg" "$tname" "$taddr" "$_tend"
+  done < "$_tun_tmp"
+
+  if [ -s "$_managed_out" ]; then
+    _u="$_managed_out.uniq"
+    sort -u "$_managed_out" > "$_u" 2>/dev/null && mv -f "$_u" "$_managed_out"
+  fi
+
+  [ -s "$_managed_out" ]
+}
+
+# true, если системный WireguardN / его addr связаны с awg-manager
+# вызов: sys_wg_is_awg_managed NAME ADDR MANAGED_FILE [DESC]
+sys_wg_is_awg_managed() {
+  name="$1"
+  addr="$2"
+  managedf="$3"
+  desc="${4:-}"
+  [ -s "$managedf" ] || return 1
+  if [ -n "$name" ] && grep -qxF "name|$name" "$managedf" 2>/dev/null; then
+    return 0
+  fi
+  if [ -n "$addr" ] && grep -qxF "addr|$addr" "$managedf" 2>/dev/null; then
+    return 0
+  fi
+  if [ -n "$desc" ] && grep -qxF "desc|$desc" "$managedf" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+# Имя туннеля awg-manager для WireguardN (из link|…)
+sys_wg_awg_label() {
+  name="$1"
+  managedf="$2"
+  [ -s "$managedf" ] || return 1
+  [ -n "$name" ] || return 1
+  sed -n "s/^link|${name}|//p" "$managedf" 2>/dev/null | head -1
+}
+
+# Импорт нового туннеля: POST /import/conf (+ start)
+# conf_use уже с нужным Endpoint
+awg_import_new_tunnel() {
+  _conf="$1"
+  if ! is_awg_manager_installed; then
+    error "awg-manager не установлен."
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    error "Нужен curl."
+    return 1
+  fi
+  if ! awg_load_api_key; then
+    error "API-ключ не задан."
+    return 1
+  fi
+  _base=$(awg_api_base)
+  _key="$AWG_KEY"
+  _listf="$TMPDIR/awg-tunnels-import.txt"
+  awg_list_tunnels "$_base" "$_key" "$_listf" >/dev/null 2>&1 || : > "$_listf"
+
+  if ! awg_ensure_free_address "$_conf" "$_listf" ""; then
+    return 1
+  fi
+
+  _def="WARP-${SELECTED_NODE:-AWG}"
+  printf '%s' "${YELLOW}[?]${NC} Имя нового туннеля [${_def}]: "
+  _tname=$(read_choice)
+  echo
+  [ -n "$_tname" ] || _tname="$_def"
+  printf '%s' "${YELLOW}[?]${NC} Backend (kernel/nativewg) [nativewg]: "
+  _backend=$(read_choice)
+  echo
+  [ -n "$_backend" ] || _backend="nativewg"
+
+  _bodyf="$TMPDIR/awg-import.json"
+  {
+    printf '{"content":"'
+    tr -d '\r' < "$_conf" | sed 's/\\/\\\\/g;s/"/\\"/g;s/\t/\\t/g' | awk '{printf "%s\\n",$0}'
+    printf '","name":"%s","backend":"%s"}' "$_tname" "$_backend"
+  } > "$_bodyf"
+
+  info "POST ${_base}/import/conf  name=$_tname backend=$_backend endpoint=${SELECTED_EP:-?}"
+  _resp=$(curl -sS --connect-timeout 5 --max-time 30 \
+    -X POST "${_base}/import/conf" \
+    -H "Authorization: Bearer ${_key}" \
+    -H "Content-Type: application/json" \
+    -d @"$_bodyf" 2>/dev/null) || _resp=""
+
+  if ! awg_api_ok "$_resp"; then
+    error "Импорт не удался."
+    [ -n "$_resp" ] && printf '%s\n' "$_resp"
+    return 1
+  fi
+  info "Импорт успешен."
+  _new_id=$(printf '%s' "$_resp" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  if [ -n "$_new_id" ]; then
+    sleep 1
+    info "Запуск $_new_id..."
+    if ! awg_control start "$_new_id" "$_key" "$_base"; then
+      warn "start не удался — restart..."
+      awg_control restart "$_new_id" "$_key" "$_base" || true
+    fi
+  else
+    warn "id нового туннеля не найден — запустите вручную."
+  fi
+  return 0
+}
+
+# Применить conf через API awg-manager к туннелю, привязанному к WireguardN.
+# ndms_name = Wireguard1, ndms_desc = wg-NO-FREE-4, conf_use = путь к conf
+awg_apply_via_api_for_ndms() {
+  _ndms="$1"
+  _ndesc="$2"
+  _conf="$3"
+
+  if ! is_awg_manager_installed; then
+    error "awg-manager не установлен."
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    error "Нужен curl."
+    return 1
+  fi
+  if ! awg_load_api_key; then
+    error "API-ключ не задан."
+    return 1
+  fi
+
+  _base=$(awg_api_base)
+  _key="$AWG_KEY"
+  _listf="$TMPDIR/awg-tunnels-redir.txt"
+  if ! awg_list_tunnels "$_base" "$_key" "$_listf" >/dev/null 2>&1 || [ ! -s "$_listf" ]; then
+    error "Не удалось получить список туннелей awg-manager."
+    return 1
+  fi
+
+  # id по ndmsName (поле 7) или по name/desc (поле 2)
+  _tid=""
+  _tname=""
+  while IFS='|' read -r tid tname tstat tend taddr tifc tndms || [ -n "$tid" ]; do
+    [ -n "$tid" ] || continue
+    if [ -n "$_ndms" ] && [ "$tndms" = "$_ndms" ]; then
+      _tid="$tid"
+      _tname="$tname"
+      break
+    fi
+    if [ -n "$_ndesc" ] && [ "$tname" = "$_ndesc" ]; then
+      _tid="$tid"
+      _tname="$tname"
+      break
+    fi
+  done < "$_listf"
+
+  if [ -z "$_tid" ]; then
+    error "Туннель awg-manager для $_ndms не найден."
+    return 1
+  fi
+
+  info "Туннель: $_tid · ${_tname:-?}  (NDMS $_ndms)"
+  printf '%s' "${YELLOW}[?]${NC} Заменить conf через API? [Y/n]: "
+  _ans=$(read_choice)
+  echo
+  case "$_ans" in n|N|no|NO|нет|Нет) info "Отменено."; return 0 ;; esac
+
+  if ! awg_ensure_free_address "$_conf" "$_listf" "$_tid"; then
+    return 1
+  fi
+
+  info "Остановка $_tid..."
+  awg_control stop "$_tid" "$_key" "$_base" || true
+
+  _bodyf="$TMPDIR/awg-replace-ndms.json"
+  {
+    printf '{"content":"'
+    tr -d '\r' < "$_conf" | sed 's/\\/\\\\/g;s/"/\\"/g;s/\t/\\t/g' | awk '{printf "%s\\n",$0}'
+    printf '"}'
+  } > "$_bodyf"
+
+  info "POST ${_base}/tunnels/replace?id=${_tid}"
+  _resp=$(curl -sS --connect-timeout 5 --max-time 30 \
+    -X POST "${_base}/tunnels/replace?id=${_tid}" \
+    -H "Authorization: Bearer ${_key}" \
+    -H "Content-Type: application/json" \
+    -d @"$_bodyf" 2>/dev/null) || _resp=""
+
+  if ! awg_api_ok "$_resp"; then
+    error "replace не удался."
+    [ -n "$_resp" ] && printf '%s\n' "$_resp"
+    return 1
+  fi
+  info "Конфиг $_tid заменён (Endpoint = ${SELECTED_EP:-?})."
+
+  sleep 1
+  info "Запуск $_tid..."
+  if ! awg_control start "$_tid" "$_key" "$_base"; then
+    warn "start не удался — restart..."
+    awg_control restart "$_tid" "$_key" "$_base" || true
+  fi
+  return 0
+}
+
+# Список системных Wireguard* → файл: name|description|address|state|endpoint|global
+# global=true|false (из RCI). Сортировка: global first, затем local.
+sys_wg_list() {
+  _swg_out="$1"
+  managedf="${2:-}"
+  : > "$_swg_out"
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+  _raw="$_swg_out.raw"
+  : > "$_raw"
+
+  _rm=$(rci_cache_min)
+  if [ -s "$_rm" ]; then
+    _names=$(grep -oE '"Wireguard[0-9]+"' "$_rm" 2>/dev/null | tr -d '"' | sort -u)
+    for _wg in $_names; do
+      case "$_wg" in Wireguard[0-9]*) ;; *) continue ;; esac
+      _blk=$(_rci_wg_block "$_rm" "$_wg") || continue
+      [ -n "$_blk" ] || continue
+      _desc=$(printf '%s' "$_blk" | grep -oE '"description"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | \
+        sed -n 's/.*"\([^"]*\)".*/\1/p')
+      _addr=$(printf '%s' "$_blk" | grep -oE '"address"[[:space:]]*:[[:space:]]*"[0-9.]+"' | head -1 | \
+        sed -n 's/.*"\([0-9.]*\)".*/\1/p')
+      _st=$(printf '%s' "$_blk" | grep -oE '"state"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | \
+        sed -n 's/.*"\([^"]*\)".*/\1/p')
+      _eh=$(printf '%s' "$_blk" | grep -oE '"remote-endpoint-address"[[:space:]]*:[[:space:]]*"[0-9.]+"' | \
+        sed -n 's/.*"\([0-9.]*\)".*/\1/p' | grep -vE '^0\.0\.0\.0$' | head -1)
+      _epo=$(printf '%s' "$_blk" | grep -oE '"remote-port"[[:space:]]*:[[:space:]]*[0-9]+' | \
+        sed -n 's/.*:[[:space:]]*\([0-9]*\)/\1/p' | grep -vE '^0$' | head -1)
+      _ep=""
+      [ -n "$_eh" ] && [ -n "$_epo" ] && _ep="${_eh}:${_epo}"
+      [ -z "$_ep" ] && [ -n "$_eh" ] && _ep="$_eh"
+      # global: true / false (по умолчанию true, если поля нет)
+      _glob="true"
+      case "$_blk" in
+        *'"global": false'*|*'"global":false'*) _glob="false" ;;
+        *'"global": true'*|*'"global":true'*) _glob="true" ;;
+      esac
+      printf '%s|%s|%s|%s|%s|%s\n' "$_wg" "${_desc:-$_wg}" "${_addr:-}" "${_st:-?}" "${_ep:-}" "$_glob" >> "$_raw"
+    done
+  fi
+
+  # дополнение из awg-manager + endpoint, если RCI не дал
+  if [ -n "$managedf" ] && [ -s "$managedf" ]; then
+    grep -E '^name\|Wireguard[0-9]+' "$managedf" 2>/dev/null | while IFS='|' read -r _k _wg || [ -n "$_wg" ]; do
+      [ -n "$_wg" ] || continue
+      grep -q "^${_wg}|" "$_raw" 2>/dev/null && continue
+      _lab=$(sed -n "s/^link|${_wg}|//p" "$managedf" 2>/dev/null | head -1)
+      _ep=$(sed -n "s/^ep|${_wg}|//p" "$managedf" 2>/dev/null | head -1)
+      printf '%s|%s|%s|%s|%s|%s\n' "$_wg" "${_lab:-$_wg}" "" "up" "${_ep:-}" "true" >> "$_raw"
+    done
+    if [ -s "$_raw" ]; then
+      _fixed="$_raw.ep"
+      : > "$_fixed"
+      while IFS='|' read -r _n _d _a _s _e _g || [ -n "$_n" ]; do
+        [ -n "$_n" ] || continue
+        [ -z "$_e" ] && _e=$(sed -n "s/^ep|${_n}|//p" "$managedf" 2>/dev/null | head -1)
+        printf '%s|%s|%s|%s|%s|%s\n' "$_n" "$_d" "$_a" "${_s:-?}" "${_e:-}" "${_g:-true}" >> "$_fixed"
+      done < "$_raw"
+      mv -f "$_fixed" "$_raw"
+    fi
+  fi
+
+  if [ -s "$_raw" ]; then
+    cp -f "$_raw" "$_swg_out" 2>/dev/null || cat "$_raw" > "$_swg_out"
+    sort_global_last "$_swg_out" end
+  fi
+  rm -f "$_raw" 2>/dev/null || true
+
+  [ -s "$_swg_out" ]
+}
+
+# RCI + awg markers → listf (name|desc|addr|state|ep|global) и managedf
+sys_wg_refresh_lists() {
+  _r_list="$1"
+  _r_mf="$2"
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+  rci_cache_invalidate
+  : > "$_r_mf"
+  awg_managed_ndms_file "$_r_mf" 2>/dev/null || true
+  sys_wg_list "$_r_list" "$_r_mf" || : > "$_r_list"
+  [ -s "$_r_list" ]
+}
+
+# Меню выбора Wireguard* из listf.
+# pick_sys_wg_menu "Заголовок" listf managedf [доп.пункт ...]
+#  return 0 — выбран интерфейс или доп.пункт
+#  return 1 — отмена / ошибка
+#  PICK_KIND=iface|extra|cancel
+#  PICK_WG PICK_DESC PICK_ADDR PICK_EP PICK_GLOB PICK_MANAGED(0|1)
+#  PICK_EXTRA=1..N при доп.пункте; PICK_COUNT=число iface в списке
+pick_sys_wg_menu() {
+  _pm_title="$1"
+  _pm_list="$2"
+  _pm_mf="$3"
+  shift 3
+  PICK_KIND="cancel"
+  PICK_WG=""; PICK_DESC=""; PICK_ADDR=""; PICK_EP=""; PICK_GLOB="true"
+  PICK_MANAGED=0; PICK_EXTRA=0; PICK_COUNT=0
+
+  echo
+  printf '%s\n' "${BOLD}${_pm_title}${NC}"
+  _pm_i=0
+  _pm_sep=0
+  if [ -s "$_pm_list" ]; then
+    while IFS='|' read -r _pn _pd _pa _ps _pe _pg || [ -n "$_pn" ]; do
+      [ -n "$_pn" ] || continue
+      if [ "$_pg" = "false" ] && [ "$_pm_sep" = "0" ]; then
+        print_local_sep
+        _pm_sep=1
+      fi
+      _pm_i=$((_pm_i + 1))
+      _plab=$(sys_wg_awg_label "$_pn" "$_pm_mf" 2>/dev/null) || _plab=""
+      [ -z "$_plab" ] && [ -n "$_pd" ] && [ "$_pd" != "$_pn" ] && _plab="$_pd"
+      _ptag=""
+      sys_wg_is_awg_managed "$_pn" "$_pa" "$_pm_mf" "$_pd" && _ptag="awg-manager"
+      print_tunnel_menu_line "$_pm_i" "$_pn" "${_ps:-?}" "$_plab" "$_pa" "$_pe" "${_pg:-true}" "$_ptag"
+    done < "$_pm_list"
+  else
+    printf '  %s(нет существующих Wireguard*)%s\n' "$DIM" "$NC"
+  fi
+  PICK_COUNT=$_pm_i
+
+  _pm_ei=0
+  for _pm_extra in "$@"; do
+    [ -n "$_pm_extra" ] || continue
+    _pm_ei=$((_pm_ei + 1))
+    _pm_num=$((PICK_COUNT + _pm_ei))
+    printf '  %s%d)%s  %s\n' "$BOLD" "$_pm_num" "$NC" "$_pm_extra"
+  done
+  _pm_max=$((PICK_COUNT + _pm_ei))
+  echo "  0) Отмена"
+  echo
+  printf '  %sВыбор:%s ' "$BOLD" "$NC"
+  _pm_sel=$(read_choice)
+  echo
+  case "$_pm_sel" in
+    0|"") info "Отменено."; PICK_KIND="cancel"; return 1 ;;
+    *[!0-9]*) warn "Неверный выбор."; return 1 ;;
+  esac
+  if [ "$_pm_sel" -lt 1 ] || [ "$_pm_sel" -gt "$_pm_max" ]; then
+    warn "Неверный номер."
+    return 1
+  fi
+  if [ "$_pm_sel" -gt "$PICK_COUNT" ]; then
+    PICK_KIND="extra"
+    PICK_EXTRA=$((_pm_sel - PICK_COUNT))
+    return 0
+  fi
+  PICK_KIND="iface"
+  PICK_WG=$(sed -n "${_pm_sel}p" "$_pm_list" | cut -d'|' -f1)
+  PICK_DESC=$(sed -n "${_pm_sel}p" "$_pm_list" | cut -d'|' -f2)
+  PICK_ADDR=$(sed -n "${_pm_sel}p" "$_pm_list" | cut -d'|' -f3)
+  PICK_EP=$(sed -n "${_pm_sel}p" "$_pm_list" | cut -d'|' -f5)
+  PICK_GLOB=$(sed -n "${_pm_sel}p" "$_pm_list" | cut -d'|' -f6)
+  PICK_MANAGED=0
+  if sys_wg_is_awg_managed "$PICK_WG" "$PICK_ADDR" "$_pm_mf" "$PICK_DESC"; then
+    PICK_MANAGED=1
+  fi
+  return 0
+}
+
+# Свободное имя WireguardN (0..15)
+sys_wg_next_name() {
+  listf="$1"
+  i=0
+  while [ "$i" -le 15 ]; do
+    name="Wireguard$i"
+    if [ -s "$listf" ] && grep -q "^${name}|" "$listf" 2>/dev/null; then
+      i=$((i + 1))
+      continue
+    fi
+    # дополнительно: есть ли в системе
+    if ip link show "$name" >/dev/null 2>&1 || [ -e "/sys/class/net/$name" ]; then
+      i=$((i + 1))
+      continue
+    fi
+    printf '%s\n' "$name"
+    return 0
+  done
+  return 1
+}
+
+# Разбор conf → переменные SYS_WG_*
+sys_wg_parse_conf() {
+  conf="$1"
+  SYS_WG_PRIV=""
+  SYS_WG_PUB=""
+  SYS_WG_ADDR=""
+  SYS_WG_DNS=""
+  SYS_WG_MTU="1280"
+  SYS_WG_EP_HOST=""
+  SYS_WG_EP_PORT=""
+  SYS_WG_KEEP="25"
+  SYS_WG_JC="0"
+  SYS_WG_JMIN="0"
+  SYS_WG_JMAX="0"
+  SYS_WG_S1="0"
+  SYS_WG_S2="0"
+  SYS_WG_S3="0"
+  SYS_WG_S4="0"
+  SYS_WG_H1="1"
+  SYS_WG_H2="2"
+  SYS_WG_H3="3"
+  SYS_WG_H4="4"
+  SYS_WG_I1=""
+
+  [ -f "$conf" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=$(printf '%s' "$line" | tr -d '\r')
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    key=$(printf '%s' "$line" | sed 's/[[:space:]]*=.*//;s/^[[:space:]]*//;s/[[:space:]]*$//')
+    val=$(printf '%s' "$line" | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+    case "$key" in
+      PrivateKey|privatekey) SYS_WG_PRIV="$val" ;;
+      PublicKey|publickey) SYS_WG_PUB="$val" ;;
+      Address|address)
+        SYS_WG_ADDR=$(printf '%s' "$val" | cut -d',' -f1 | cut -d'/' -f1 | tr -d ' ')
+        ;;
+      DNS|dns) SYS_WG_DNS="$val" ;;
+      MTU|mtu) SYS_WG_MTU="$val" ;;
+      Endpoint|endpoint)
+        SYS_WG_EP_HOST=$(printf '%s' "$val" | sed 's/:.*//')
+        SYS_WG_EP_PORT=$(printf '%s' "$val" | sed 's/.*://')
+        ;;
+      PersistentKeepalive|persistentkeepalive) SYS_WG_KEEP="$val" ;;
+      Jc|jc) SYS_WG_JC="$val" ;;
+      Jmin|jmin) SYS_WG_JMIN="$val" ;;
+      Jmax|jmax) SYS_WG_JMAX="$val" ;;
+      S1|s1) SYS_WG_S1="$val" ;;
+      S2|s2) SYS_WG_S2="$val" ;;
+      S3|s3) SYS_WG_S3="$val" ;;
+      S4|s4) SYS_WG_S4="$val" ;;
+      H1|h1) SYS_WG_H1="$val" ;;
+      H2|h2) SYS_WG_H2="$val" ;;
+      H3|h3) SYS_WG_H3="$val" ;;
+      H4|h4) SYS_WG_H4="$val" ;;
+      I1|i1) SYS_WG_I1="$val" ;;
+    esac
+  done < "$conf"
+
+  [ -n "$SYS_WG_PRIV" ] && [ -n "$SYS_WG_PUB" ] && [ -n "$SYS_WG_EP_HOST" ] && [ -n "$SYS_WG_EP_PORT" ]
+}
+
+# Применить conf на системный интерфейс ifname (создать/обновить)
+# $1=ifname $2=conf $3=description
+sys_wg_apply() {
+  ifname="$1"
+  conf="$2"
+  desc="${3:-WARP}"
+
+  if ! command -v ndmc >/dev/null 2>&1; then
+    error "ndmc не найден — системный WireGuard недоступен."
+    return 1
+  fi
+  ensure_conf_keenetic_fields "$conf" || true
+  if ! sys_wg_parse_conf "$conf"; then
+    error "Не удалось разобрать conf (нужны PrivateKey, PublicKey, Endpoint)."
+    return 1
+  fi
+
+  [ -n "$SYS_WG_ADDR" ] || SYS_WG_ADDR="172.16.0.2"
+  [ -n "$SYS_WG_MTU" ] || SYS_WG_MTU="1280"
+  [ -n "$SYS_WG_KEEP" ] || SYS_WG_KEEP="25"
+
+  info "Системный туннель: $ifname"
+  info "  Endpoint ${SYS_WG_EP_HOST}:${SYS_WG_EP_PORT}"
+  info "  Address  ${SYS_WG_ADDR}/32  MTU ${SYS_WG_MTU}"
+  info "  ASC jc=${SYS_WG_JC} jmin=${SYS_WG_JMIN} jmax=${SYS_WG_JMAX}"
+
+  # Создать/открыть интерфейс
+  _ndmc_out=$(ndmc_cli "interface $ifname" 2>&1) || true
+  ndmc_cli "interface $ifname description $desc" >/dev/null 2>&1 || true
+
+  # Ключ: CLI — private-key (не security-key); fallback через RCI
+  _ok_key=0
+  _ndmc_out=""
+  if _ndmc_out=$(ndmc_cli "interface $ifname wireguard private-key $SYS_WG_PRIV" 2>&1); then
+    _ok_key=1
+  elif command -v curl >/dev/null 2>&1; then
+    # RCI POST (forum.keenetic: wireguard.private-key.private-key)
+    _rci_body=$(printf '[{"wireguard":{"private-key":{"private-key":"%s"}}}]' "$SYS_WG_PRIV")
+    _rci_resp=$(curl -sS --connect-timeout 2 --max-time 5 \
+      -X POST "http://127.0.0.1:79/rci/interface/$ifname" \
+      -H "Content-Type: application/json" \
+      -d "$_rci_body" 2>/dev/null) || _rci_resp=""
+    if ! printf '%s' "$_rci_resp" | grep -qE '"status"[[:space:]]*:[[:space:]]*"error"'; then
+      _ok_key=1
+    fi
+  fi
+  if [ "$_ok_key" != "1" ]; then
+    error "Не удалось задать private-key для $ifname."
+    [ -n "$_ndmc_out" ] && printf '%s\n' "${DIM}$_ndmc_out${NC}" | head -c 300 && echo
+    error "Проверьте: компонент WireGuard VPN (Управление → Компоненты)."
+    error "Или: веб → Другие подключения → WireGuard → Загрузить из файла."
+    return 1
+  fi
+  info "private-key задан."
+
+  # Адрес / MTU
+  ndmc_cli "interface $ifname ip address $SYS_WG_ADDR 255.255.255.255" >/dev/null 2>&1 || \
+    ndmc_cli "interface $ifname ip address $SYS_WG_ADDR/32" >/dev/null 2>&1 || \
+    warn "Не удалось задать ip address (проверьте вручную)."
+  ndmc_cli "interface $ifname ip mtu $SYS_WG_MTU" >/dev/null 2>&1 || true
+
+  # Peer (CLI: endpoint host:port одним аргументом — см. CLI manual Keenetic)
+  ndmc_cli "interface $ifname wireguard peer $SYS_WG_PUB" >/dev/null 2>&1 || true
+  _ep_ok=0
+  _ep_out=""
+  if _ep_out=$(ndmc_cli "interface $ifname wireguard peer $SYS_WG_PUB endpoint ${SYS_WG_EP_HOST}:${SYS_WG_EP_PORT}" 2>&1); then
+    _ep_ok=1
+  elif _ep_out=$(ndmc_cli "interface $ifname wireguard peer $SYS_WG_PUB endpoint $SYS_WG_EP_HOST $SYS_WG_EP_PORT" 2>&1); then
+    _ep_ok=1
+  elif command -v curl >/dev/null 2>&1; then
+    # RCI: peer key + endpoint
+    _rci_body=$(printf '[{"wireguard":{"peer":{"key":"%s","endpoint":"%s:%s"}}}]' \
+      "$SYS_WG_PUB" "$SYS_WG_EP_HOST" "$SYS_WG_EP_PORT")
+    _rci_resp=$(curl -sS --connect-timeout 2 --max-time 5 \
+      -X POST "http://127.0.0.1:79/rci/interface/$ifname" \
+      -H "Content-Type: application/json" \
+      -d "$_rci_body" 2>/dev/null) || _rci_resp=""
+    if ! printf '%s' "$_rci_resp" | grep -qE '"status"[[:space:]]*:[[:space:]]*"error"'; then
+      _ep_ok=1
+    fi
+  fi
+  if [ "$_ep_ok" != "1" ]; then
+    error "peer endpoint не принят (${SYS_WG_EP_HOST}:${SYS_WG_EP_PORT})."
+    [ -n "$_ep_out" ] && printf '%s\n' "${DIM}$_ep_out${NC}" | head -c 300 && echo
+    return 1
+  fi
+  info "peer endpoint ${SYS_WG_EP_HOST}:${SYS_WG_EP_PORT}"
+  ndmc_cli "interface $ifname wireguard peer $SYS_WG_PUB allow-ips 0.0.0.0/0" >/dev/null 2>&1 || \
+    ndmc_cli "interface $ifname wireguard peer $SYS_WG_PUB allows 0.0.0.0/0" >/dev/null 2>&1 || \
+    warn "allow-ips не принят — задайте в веб-UI."
+  ndmc_cli "interface $ifname wireguard peer $SYS_WG_PUB keepalive-interval $SYS_WG_KEEP" >/dev/null 2>&1 || \
+    ndmc_cli "interface $ifname wireguard peer $SYS_WG_PUB keepalive $SYS_WG_KEEP" >/dev/null 2>&1 || true
+
+  # ASC: базовый 8-arg; при наличии I1 — расширенный (s3 s4 i1 …) в кавычках
+  _asc_ok=0
+  if [ -n "$SYS_WG_I1" ]; then
+    # Keenetic 5.1+: asc jc jmin jmax s1 s2 h1 h2 h3 h4 [s3 s4 i1 i2 i3 i4 i5]
+    if ndmc_cli "interface $ifname wireguard asc $SYS_WG_JC $SYS_WG_JMIN $SYS_WG_JMAX $SYS_WG_S1 $SYS_WG_S2 $SYS_WG_H1 $SYS_WG_H2 $SYS_WG_H3 $SYS_WG_H4 $SYS_WG_S3 $SYS_WG_S4 \"$SYS_WG_I1\" \"\" \"\" \"\" \"\"" >/dev/null 2>&1; then
+      _asc_ok=1
+      info "ASC + I1 заданы (расширенный CLI)."
+    fi
+  fi
+  if [ "$_asc_ok" != "1" ]; then
+    if ndmc_cli "interface $ifname wireguard asc $SYS_WG_JC $SYS_WG_JMIN $SYS_WG_JMAX $SYS_WG_S1 $SYS_WG_S2 $SYS_WG_H1 $SYS_WG_H2 $SYS_WG_H3 $SYS_WG_H4" >/dev/null 2>&1; then
+      _asc_ok=1
+      info "ASC задан (jc/jmin/jmax/H)."
+      if [ -n "$SYS_WG_I1" ]; then
+        warn "I1 не принят CLI (${#SYS_WG_I1} симв.) — для DPI:"
+        warn "  веб → WireGuard → «Загрузить из файла»: $conf"
+        warn "  или п.5 → awg-manager (NativeWG)."
+      fi
+    else
+      warn "ASC не принят — прошивка без AmneziaWG / задайте вручную."
+    fi
+  fi
+
+  # Поднять + «для интернета» (ip global <priority>, не без аргумента)
+  ndmc_cli "interface $ifname up" >/dev/null 2>&1 || warn "interface up — проверьте статус."
+  ndmc_cli "interface $ifname ip global 1000" >/dev/null 2>&1 ||     ndmc_cli "interface $ifname ip global" >/dev/null 2>&1 || true
+  ndmc_cli "interface $ifname security-level public" >/dev/null 2>&1 || true
+
+  if ndmc_cli "system configuration save" >/dev/null 2>&1; then
+    info "Конфигурация сохранена (system configuration save)."
+  else
+    warn "system configuration save не удался — сохраните вручную."
+  fi
+
+  info "Готово: $ifname ← $desc"
+  if [ -n "$SYS_WG_I1" ] && [ "$_asc_ok" = "1" ]; then
+    info "Если handshake не держится — импорт conf из файла в веб-UI надёжнее для I1."
+  fi
+  info "Проверьте: веб → WireGuard → $ifname  ·  или п.6"
+  return 0
+}
+
+do_apply_system_wg() {
+  echo
+  info "Применить conf → WireGuard"
+  if ! has_conf; then
+    error "Нет конфига: $CONF_OUT (сначала п.3)."
+    return 1
+  fi
+  if ! command -v ndmc >/dev/null 2>&1; then
+    error "ndmc не найден."
+    return 1
+  fi
+
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+
+  # endpoint из list (как для awg-manager)
+  if ! awg_pick_endpoint; then
+    return 1
+  fi
+  conf_use="$TMPDIR/warpscout-syswg.conf"
+  if ! awg_patch_conf_endpoint "$CONF_OUT" "$conf_use" "$SELECTED_EP"; then
+    error "Не удалось подставить Endpoint."
+    return 1
+  fi
+  ensure_conf_keenetic_fields "$conf_use" || true
+  # синхронизируем основной conf
+  cp -f "$conf_use" "$CONF_OUT" 2>/dev/null || true
+  info "В conf: Endpoint = $SELECTED_EP"
+
+  managedf="$TMPDIR/awg-ndms-sys.txt"
+  listf="$TMPDIR/sys-wg-list.txt"
+  sys_wg_refresh_lists "$listf" "$managedf" || true
+
+  if is_awg_manager_installed; then
+    pick_sys_wg_menu "Системные WireGuard:" "$listf" "$managedf" \
+      "Создать новый WireguardN" \
+      "Импорт нового туннеля через awg-manager" || return 0
+  else
+    pick_sys_wg_menu "Системные WireGuard:" "$listf" "$managedf" \
+      "Создать новый WireguardN" || return 0
+  fi
+
+  ifname=""
+  desc="WARP-${SELECTED_NODE:-AWG}"
+  if [ "$PICK_KIND" = "extra" ]; then
+    if is_awg_manager_installed && [ "$PICK_EXTRA" = "2" ]; then
+      awg_import_new_tunnel "$conf_use"
+      return $?
+    fi
+    # extra 1 (или единственный) — создать WireguardN
+    ifname=$(sys_wg_next_name "$listf") || ifname=""
+    if [ -z "$ifname" ]; then
+      error "Нет свободного Wireguard0…15."
+      return 1
+    fi
+    printf '%s' "${YELLOW}[?]${NC} Имя (description) [${desc}]: "
+    d=$(read_choice)
+    echo
+    [ -n "$d" ] && desc="$d"
+    info "Создаём $ifname ($desc)..."
+  else
+    ifname="$PICK_WG"
+    old_desc="$PICK_DESC"
+    old_addr="$PICK_ADDR"
+    if [ "$PICK_MANAGED" = "1" ]; then
+      info "$ifname → awg-manager API"
+      awg_apply_via_api_for_ndms "$ifname" "$old_desc" "$conf_use"
+      return $?
+    fi
+    printf '%s' "${YELLOW}[?]${NC} Заменить conf на «${ifname}» (${old_desc})? [Y/n]: "
+    ans=$(read_choice)
+    echo
+    case "$ans" in n|N|no|NO|нет|Нет) info "Отменено."; return 0 ;; esac
+    desc="${old_desc:-$desc}"
+  fi
+
+  # конфликт адреса: list (name|desc|addr|state) + live Wireguard/nwg/awg
+  conf_ip=$(grep -iE '^[[:space:]]*Address[[:space:]]*=' "$conf_use" 2>/dev/null | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/\/.*//;s/,.*//;s/[[:space:]]//g')
+  [ -n "$conf_ip" ] || conf_ip="172.16.0.2"
+  usedf="$TMPDIR/sys-used-addr.txt"
+  : > "$usedf"
+  if [ -s "$listf" ]; then
+    while IFS='|' read -r n d a s || [ -n "$n" ]; do
+      [ "$n" = "$ifname" ] && continue
+      [ -n "$a" ] && printf '%s\n' "$a" >> "$usedf"
+    done < "$listf"
+  fi
+  for _p in /sys/class/net/Wireguard* /sys/class/net/nwg* /sys/class/net/awg*; do
+    [ -e "$_p" ] || continue
+    _b=$(basename "$_p")
+    [ "$_b" = "$ifname" ] && continue
+    _a=""
+    if command -v ip >/dev/null 2>&1; then
+      _a=$(ip -4 -o addr show dev "$_b" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+    fi
+    [ -n "$_a" ] && printf '%s\n' "$_a" >> "$usedf"
+  done
+  if grep -qxF "$conf_ip" "$usedf" 2>/dev/null; then
+    n=2
+    while [ "$n" -le 254 ]; do
+      cand="172.16.0.$n"
+      if ! grep -qxF "$cand" "$usedf" 2>/dev/null; then
+        info "Адрес $conf_ip занят → $cand"
+        if ! awg_patch_conf_address "$conf_use" "$cand" 2>/dev/null; then
+          tmpa="$conf_use.addr"
+          if awk -v ip="$cand" 'tolower($0) ~ /^[[:space:]]*address[[:space:]]*=/ { print "Address = " ip "/32"; next } { print }' \
+              "$conf_use" > "$tmpa" 2>/dev/null && [ -s "$tmpa" ]; then
+            mv -f "$tmpa" "$conf_use"
+          else
+            rm -f "$tmpa" 2>/dev/null || true
+            warn "Не удалось записать Address=$cand в conf."
+          fi
+        fi
+        break
+      fi
+      n=$((n + 1))
+    done
+  else
+    info "Address $conf_ip свободен (system check)."
+  fi
+
+  sys_wg_apply "$ifname" "$conf_use" "$desc"
+}
+
+
+# Точка входа п.5: единый список WireGuard
+# (интерфейсы [awg-manager] → API, остальные → NDMS)
+do_apply_conf() {
+  echo
+  info "Применить conf"
+  if ! has_conf; then
+    error "Нет конфига: $CONF_OUT"
+    error "Сначала выполните пункт 3 (сканирование)."
+    return 1
+  fi
+  do_apply_system_wg
+}
+
+
+# ---------------------------------------------------------------------------
+# 6) Проверка туннеля (через интерфейс nwg*/awg*)
+# ---------------------------------------------------------------------------
+lookup_colo() {
+  code="$1"
+  [ -n "$code" ] || return 1
+  case "$code" in
+    HEL) printf '%s' "Хельсинки, Финляндия"; return 0 ;;
+    ARN) printf '%s' "Стокгольм, Швеция"; return 0 ;;
+    OSL) printf '%s' "Осло, Норвегия"; return 0 ;;
+    CPH) printf '%s' "Копенгаген, Дания"; return 0 ;;
+    FRA) printf '%s' "Франкфурт, Германия"; return 0 ;;
+    AMS) printf '%s' "Амстердам, Нидерланды"; return 0 ;;
+    LHR|LON) printf '%s' "Лондон, Великобритания"; return 0 ;;
+    WAW) printf '%s' "Варшава, Польша"; return 0 ;;
+    VIE) printf '%s' "Вена, Австрия"; return 0 ;;
+    PRG) printf '%s' "Прага, Чехия"; return 0 ;;
+    LED|SVO|DME|VKO) printf '%s' "Москва, Россия"; return 0 ;;
+    MSQ) printf '%s' "Минск, Беларусь"; return 0 ;;
+    IST) printf '%s' "Стамбул, Турция"; return 0 ;;
+    DXB) printf '%s' "Дубай, ОАЭ"; return 0 ;;
+    SIN) printf '%s' "Сингапур"; return 0 ;;
+    NRT|HND) printf '%s' "Токио, Япония"; return 0 ;;
+    LAX) printf '%s' "Лос-Анджелес, США"; return 0 ;;
+    EWR|JFK|LGA) printf '%s' "Нью-Йорк, США"; return 0 ;;
+    CDG) printf '%s' "Париж, Франция"; return 0 ;;
+  esac
+  return 1
+}
+
+show_cf_trace() {
+  ifc="$1"
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl нет — trace недоступен"
+    return 1
+  fi
+  info "Cloudflare trace (cdn-cgi/trace) via $ifc..."
+  trace=$(curl -sS --connect-timeout 5 --max-time 10 --interface "$ifc" \
+    "https://cloudflare.com/cdn-cgi/trace" 2>/dev/null) || trace=""
+  if [ -z "$trace" ]; then
+    warn "trace: нет ответа via $ifc"
+    return 1
+  fi
+  cf_ip=$(printf '%s\n' "$trace" | sed -n 's/^ip=//p' | head -1)
+  cf_colo=$(printf '%s\n' "$trace" | sed -n 's/^colo=//p' | head -1)
+  cf_loc=$(printf '%s\n' "$trace" | sed -n 's/^loc=//p' | head -1)
+  cf_warp=$(printf '%s\n' "$trace" | sed -n 's/^warp=//p' | head -1)
+  cf_http=$(printf '%s\n' "$trace" | sed -n 's/^http=//p' | head -1)
+  cf_tls=$(printf '%s\n' "$trace" | sed -n 's/^tls=//p' | head -1)
+  [ -n "$cf_ip" ] && info "  ip=$cf_ip"
+  if [ -n "$cf_colo" ]; then
+    colo_name=$(lookup_colo "$cf_colo" 2>/dev/null) || colo_name=""
+    if [ -n "$colo_name" ]; then
+      info "  colo=$cf_colo — $colo_name"
+    else
+      info "  colo=$cf_colo"
+    fi
+  fi
+  [ -n "$cf_loc" ] && info "  loc=$cf_loc"
+  [ -n "$cf_warp" ] && info "  warp=$cf_warp"
+  [ -n "$cf_http" ] && info "  http=$cf_http"
+  [ -n "$cf_tls" ] && info "  tls=$cf_tls"
+  case "$cf_warp" in
+    on|ON) info "  WARP: активен" ;;
+    off|OFF) warn "  WARP: off (трафик не через WARP?)" ;;
+  esac
+  return 0
+}
+
+check_url_via_iface() {
+  ifc="$1"
+  url="$2"
+  label="$3"
+  code="000"
+  if ! command -v curl >/dev/null 2>&1; then
+    error "Нужен curl."
+    return 1
+  fi
+  errf="$TMPDIR/curl-err-$$"
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+  # http_code|time_total (сек) — показываем время ответа
+  _out=$(curl -sS -o /dev/null -w '%{http_code}|%{time_total}' \
+    --connect-timeout 3 --max-time 4 \
+    --interface "$ifc" -L "$url" 2>"$errf") || true
+  code=$(printf '%s' "$_out" | cut -d'|' -f1 | tr -d '\r\n ')
+  _sec=$(printf '%s' "$_out" | cut -d'|' -f2 | tr -d '\r\n ')
+  case "$code" in
+    ''|*[!0-9]*) code="000" ;;
+  esac
+  # сек → мс (ash без printf %.0f — через awk)
+  _ms=""
+  case "$_sec" in
+    ''|*[!0-9.]*) _ms="" ;;
+    *)
+      _ms=$(awk -v s="$_sec" 'BEGIN{printf "%d", s*1000+0.5}' 2>/dev/null) || _ms=""
+      ;;
+  esac
+  _tm=""
+  if [ -n "$_ms" ]; then
+    # до 700 зелёный, 700–2000 жёлтый, >2000 красный
+    _tc="$GREEN"
+    if [ "$_ms" -gt 2000 ] 2>/dev/null; then
+      _tc="$RED"
+    elif [ "$_ms" -gt 700 ] 2>/dev/null; then
+      _tc="$YELLOW"
+    fi
+    _tm=" · ${_tc}${_ms} ms${NC}"
+  fi
+  err=""
+  [ -s "$errf" ] && err=$(tr '\n' ' ' < "$errf" | head -c 100)
+  rm -f "$errf"
+  case "$code" in
+    2??|3??)
+      info "$label: OK (HTTP $code)${_tm} via $ifc"
+      return 0
+      ;;
+    000)
+      warn "$label: нет ответа${_tm} via $ifc${err:+ — $err}"
+      return 1
+      ;;
+    *)
+      warn "$label: HTTP $code${_tm} via $ifc${err:+ — $err}"
+      return 1
+      ;;
+  esac
+}
+
+run_iface_probes() {
+  _probe_ok=0
+  check_url_via_iface "$1" "https://2ip.io/" "2ip.io" && _probe_ok=$((_probe_ok + 1))
+  check_url_via_iface "$1" "https://www.google.com/" "google.com" && _probe_ok=$((_probe_ok + 1))
+  # web.telegram.org часто режется; fallback на telegram.org
+  if check_url_via_iface "$1" "https://web.telegram.org/" "web.telegram.org"; then
+    _probe_ok=$((_probe_ok + 1))
+  elif check_url_via_iface "$1" "https://telegram.org/" "telegram.org"; then
+    _probe_ok=$((_probe_ok + 1))
+  fi
+}
+
+list_tunnel_ifaces() {
+  _if_list=""
+  for n in /sys/class/net/*; do
+    [ -e "$n" ] || continue
+    b=$(basename "$n")
+    case "$b" in
+      nwg*|awg*|awgm*|opkgtun*|Wireguard*|wireguard*|t2s*) _if_list="${_if_list} $b" ;;
+    esac
+  done
+  printf '%s\n' $_if_list | tr ' ' '\n' | grep -v '^$' | sort -u
+}
+
+_iflist_has() {
+  grep -q "^${2}|" "$1" 2>/dev/null
+}
+
+_strip_q() {
+  printf '%s' "$1" | sed 's/^["'"'"']*//;s/["'"'"']*$//;s/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+# RCI-кэш → map: ifc|name|addr|status|global  (nwg/t2s/opkgtun)
+_rci_tunnel_map() {
+  _rtm_out="$1"
+  : > "$_rtm_out"
+  _rm=$(rci_cache_min)
+  [ -s "$_rm" ] || return 1
+  awk '
+    BEGIN { RS="{" }
+    function get(s, key,    p, rest, q2) {
+      p = index(s, "\"" key "\"")
+      if (!p) return ""
+      rest = substr(s, p + length(key) + 2)
+      sub(/^[[:space:]]*:[[:space:]]*/, "", rest)
+      if (substr(rest, 1, 1) != "\"") return ""
+      rest = substr(rest, 2)
+      q2 = index(rest, "\"")
+      if (!q2) return ""
+      return substr(rest, 1, q2 - 1)
+    }
+    function digits(s,    i, c, out) {
+      out = ""
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c >= "0" && c <= "9") out = out c
+      }
+      return out
+    }
+    {
+      typ = get($0, "type")
+      if (typ != "Wireguard" && typ != "Proxy" && typ != "OpkgTun") next
+      id = get($0, "id")
+      if (id == "") next
+      desc = get($0, "description")
+      addr = get($0, "address")
+      link = get($0, "link")
+      if (link == "") link = "up"
+      num = digits(id)
+      linux = id
+      if (typ == "Wireguard" && num != "") linux = "nwg" num
+      if (typ == "Proxy" && num != "") linux = "t2s" num
+      if (typ == "OpkgTun" && num != "") linux = "opkgtun" num
+      name = desc
+      if (name == "") name = id
+      glob = "true"
+      if (index($0, "\"global\": false") || index($0, "\"global\":false")) glob = "false"
+      print linux "|" name "|" addr "|" link "|" glob
+    }
+  ' "$_rm" > "$_rtm_out" 2>/dev/null
+  [ -s "$_rtm_out" ]
+}
+
+do_check_tunnel() {
+  echo
+  info "Проверка туннеля"
+  if ! command -v curl >/dev/null 2>&1; then
+    error "Нужен curl."
+    return 1
+  fi
+
+  ensure_tmpdir
+  rci_cache_invalidate
+  # ifc|name|status|addr|global|endpoint
+  iflistf="$TMPDIR/ifaces.txt"
+  : > "$iflistf"
+
+  # --- RCI-кэш: имена + адреса + link ---
+  mapf="$TMPDIR/rci-tun.map"
+  _rci_tunnel_map "$mapf" 2>/dev/null || : > "$mapf"
+
+  # --- интерфейсы из sysfs (без ifconfig/ip на каждый) ---
+  # iflistf: ifc|name|status|addr|global
+  for ifc in $(list_tunnel_ifaces); do
+    [ -n "$ifc" ] || continue
+    st="up"
+    [ -e "/sys/class/net/$ifc/operstate" ] && st=$(cat "/sys/class/net/$ifc/operstate" 2>/dev/null || echo up)
+    case "$st" in unknown|down) ;; *) st="up" ;; esac
+    line=$(grep "^${ifc}|" "$mapf" 2>/dev/null | head -1)
+    glob="false"
+    if [ -n "$line" ]; then
+      name=$(printf '%s' "$line" | cut -d'|' -f2)
+      addr=$(printf '%s' "$line" | cut -d'|' -f3)
+      rlink=$(printf '%s' "$line" | cut -d'|' -f4)
+      glob=$(printf '%s' "$line" | cut -d'|' -f5)
+      [ -n "$rlink" ] && st="$rlink"
+    else
+      name="$ifc"
+      addr=""
+    fi
+    [ -n "$glob" ] || glob="false"
+    # ifc|name|status|addr|global|endpoint
+    printf '%s|%s|%s|%s|%s|%s\n' "$ifc" "$name" "$st" "$addr" "$glob" "" >> "$iflistf"
+  done
+
+  if [ ! -s "$iflistf" ] && [ -s "$mapf" ]; then
+    while IFS='|' read -r ifc name addr st glob || [ -n "$ifc" ]; do
+      case "$ifc" in nwg*|t2s*|opkgtun*|awg*) ;; *) continue ;; esac
+      _iflist_has "$iflistf" "$ifc" && continue
+      printf '%s|%s|%s|%s|%s|%s\n' "$ifc" "${name:-$ifc}" "${st:-up}" "$addr" "${glob:-false}" "" >> "$iflistf"
+    done < "$mapf"
+  fi
+
+  # awg-manager: имена/status для awgm*/nwg* (один быстрый запрос)
+  if is_awg_manager_installed && awg_load_api_key_quiet; then
+    base=$(awg_api_base)
+    listf="$TMPDIR/awg-tunnels-check.txt"
+    if awg_list_tunnels "$base" "$AWG_KEY" "$listf" 2>/dev/null; then
+      while IFS='|' read -r _tid tname tstat tend taddr tifc _tndms || [ -n "$_tid" ]; do
+        tifc=$(_strip_q "$tifc")
+        tname=$(_strip_q "$tname")
+        tstat=$(_strip_q "$tstat")
+        tend=$(_strip_q "$tend")
+        [ -n "$tifc" ] || continue
+        case "$tifc" in *'|'*) tifc=$(_strip_q "$(printf '%s' "$tifc" | cut -d'|' -f1)") ;; esac
+        ta=$(printf '%s' "$taddr" | cut -d/ -f1)
+        ta=$(_strip_q "$ta")
+        if _iflist_has "$iflistf" "$tifc"; then
+          tmpm="$iflistf.map"
+          : > "$tmpm"
+          while IFS='|' read -r _i _n _s _a _g _e || [ -n "$_i" ]; do
+            _i=$(_strip_q "$_i")
+            if [ "$_i" = "$tifc" ]; then
+              printf '%s|%s|%s|%s|%s|%s\n' "$tifc" "${tname:-$_n}" "${tstat:-$_s}" "${ta:-$_a}" "true" "${tend:-$_e}" >> "$tmpm"
+            else
+              printf '%s|%s|%s|%s|%s|%s\n' "$_i" "$_n" "$_s" "$_a" "$_g" "$_e" >> "$tmpm"
+            fi
+          done < "$iflistf"
+          mv -f "$tmpm" "$iflistf" 2>/dev/null || cp -f "$tmpm" "$iflistf"
+        else
+          printf '%s|%s|%s|%s|true|%s\n' "$tifc" "${tname:-$tifc}" "${tstat:-up}" "$ta" "$tend" >> "$iflistf"
+        fi
+      done < "$listf"
+    fi
+  fi
+
+  # дедуп по ifc
+  if [ -s "$iflistf" ]; then
+    tmpd="$iflistf.dedup"
+    : > "$tmpd"
+    while IFS='|' read -r _i _n _s _a _g _e || [ -n "$_i" ]; do
+      _i=$(_strip_q "$_i")
+      [ -n "$_i" ] || continue
+      _iflist_has "$tmpd" "$_i" && continue
+      printf '%s|%s|%s|%s|%s|%s\n' "$_i" "$(_strip_q "$_n")" "$(_strip_q "$_s")" "$(_strip_q "$_a")" "$(_strip_q "${_g:-true}")" "$(_strip_q "${_e}")" >> "$tmpd"
+    done < "$iflistf"
+    mv -f "$tmpd" "$iflistf" 2>/dev/null || cp -f "$tmpd" "$iflistf"
+  fi
+
+  [ -s "$iflistf" ] && sort_global_last "$iflistf" mid
+
+  if [ ! -s "$iflistf" ]; then
+    error "Не найдены туннели (nwg*/awgm*/t2s*/opkgtun*)."
+    return 1
+  fi
+
+  i=$(wc -l < "$iflistf" 2>/dev/null | tr -d ' ')
+  case "$i" in ''|*[!0-9]*) i=0 ;; esac
+
+  # цикл: проверка → снова список (без выхода в главное меню)
+  while true; do
+    iface=""
+    tlabel=""
+
+    if [ "$i" -eq 1 ]; then
+      iface=$(sed -n '1p' "$iflistf" | cut -d'|' -f1)
+      tlabel=$(sed -n '1p' "$iflistf" | cut -d'|' -f2)
+      tstat=$(sed -n '1p' "$iflistf" | cut -d'|' -f3)
+      taddr=$(sed -n '1p' "$iflistf" | cut -d'|' -f4)
+      tglob=$(sed -n '1p' "$iflistf" | cut -d'|' -f5)
+      tend=$(sed -n '1p' "$iflistf" | cut -d'|' -f6)
+      if [ "$tglob" = "true" ]; then
+        info "Интерфейс: $iface · ${GREEN}${tlabel}${NC}${taddr:+ · $taddr}${tend:+ · $tend}  ${DIM}[${tstat}]${NC}"
+      else
+        info "Интерфейс: $iface · ${DIM}${tlabel}${NC}${taddr:+ · $taddr}${tend:+ · $tend}  ${DIM}[${tstat}]${NC}"
+      fi
+    else
+      echo
+      printf '%s\n' "${BOLD}Туннели / интерфейсы:${NC}"
+      n=0
+      _sep_done=0
+      while IFS='|' read -r ifc tlab tstat taddr tglob tend || [ -n "$ifc" ]; do
+        [ -n "$ifc" ] || continue
+        if [ "$tglob" = "false" ] && [ "$_sep_done" = "0" ]; then
+          print_local_sep
+          _sep_done=1
+        fi
+        n=$((n + 1))
+        print_tunnel_menu_line "$n" "$ifc" "${tstat:-?}" "$tlab" "$taddr" "$tend" "${tglob:-true}"
+      done < "$iflistf"
+      echo "  0) Выход"
+      echo
+      printf '  %sВыбор:%s ' "$BOLD" "$NC"
+      sel=$(read_choice)
+      echo
+      case "$sel" in
+        0|"") info "Выход из проверки."; return 0 ;;
+        *[!0-9]*) warn "Неверный выбор."; continue ;;
+      esac
+      if [ "$sel" -lt 1 ] || [ "$sel" -gt "$n" ]; then
+        warn "Неверный номер."
+        continue
+      fi
+      iface=$(sed -n "${sel}p" "$iflistf" | cut -d'|' -f1)
+      tlabel=$(sed -n "${sel}p" "$iflistf" | cut -d'|' -f2)
+    fi
+
+    [ -n "$iface" ] || { error "Пустой интерфейс."; return 1; }
+
+    if ! ip link show "$iface" >/dev/null 2>&1 && [ ! -e "/sys/class/net/$iface" ]; then
+      warn "Интерфейс $iface не найден (ip link)."
+    fi
+
+    echo
+    info "Проверяем: $iface${tlabel:+ · $tlabel}"
+    run_iface_probes "$iface"
+    ok=$_probe_ok
+    echo
+    show_cf_trace "$iface" || true
+    echo
+    if [ "$ok" -ge 2 ]; then
+      info "Проверка пройдена: $ok/3 хостов доступны через $iface"
+    else
+      error "Хосты недоступны через $iface ($ok/3)"
+      printf '%s\n' "${DIM}Вручную: curl --interface $iface -m 10 -L https://2ip.io/${NC}"
+    fi
+
+    # один интерфейс — не крутить меню
+    if [ "$i" -eq 1 ]; then
+      return 0
+    fi
+
+    echo
+    if confirm_Y "Проверить другой туннель?"; then
+      continue
+    fi
+    return 0
+  done
+}
+
+# ---------------------------------------------------------------------------
+# 88) Удаление
+# ---------------------------------------------------------------------------
+do_remove() {
+  echo
+  info "Удаление warpscout"
+  if ! is_installed && [ ! -f "$ACCOUNT_FILE" ] && [ ! -f "$SCAN_OUT" ] && [ ! -f "$CONF_OUT" ]; then
+    warn "Ничего не найдено."
+    return 0
+  fi
+
+  if ! confirm_yes "Удалить warpscout и связанные файлы?"; then
+    info "Отменено."
+    return 0
+  fi
+
+  remove_data=0
+  if [ -f "$ACCOUNT_FILE" ] || [ -f "$SCAN_OUT" ] || [ -f "$CONF_OUT" ]; then
+    confirm_yes "Также удалить аккаунт, list и conf?" && remove_data=1
+  fi
+
+  if [ -f "$BIN" ]; then
+    rm -f "$BIN" "${BIN}.bak" 2>/dev/null || true
+    info "  удалён: $BIN"
+  fi
+
+  if [ "$remove_data" = "1" ]; then
+    [ -f "$ACCOUNT_FILE" ] && rm -f "$ACCOUNT_FILE" && info "  удалён: $ACCOUNT_FILE"
+    [ -f "$SCAN_OUT" ] && rm -f "$SCAN_OUT" && info "  удалён: $SCAN_OUT"
+    [ -f "$CONF_OUT" ] && rm -f "$CONF_OUT" && info "  удалён: $CONF_OUT"
+    [ -f "$JUNK_FILE" ] && rm -f "$JUNK_FILE" && info "  удалён: $JUNK_FILE"
+    [ -f "$FIND_JUNK_LOG" ] && rm -f "$FIND_JUNK_LOG" && info "  удалён: $FIND_JUNK_LOG"
+  fi
+
+  info "Готово."
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Меню
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Показать сохранённый conf (+ опционально QR, если есть qrencode)
+# ---------------------------------------------------------------------------
+
+
+# Дописать S1–S4 / H1–H4 в conf (иначе Keenetic WebUI не импортирует warpscout conf)
+# По отчётам: после I1 (или перед [Peer])
+ensure_conf_keenetic_fields() {
+  conf="$1"
+  [ -f "$conf" ] || return 1
+  has_s1=0
+  has_h1=0
+  grep -qiE '^[[:space:]]*S1[[:space:]]*=' "$conf" 2>/dev/null && has_s1=1
+  grep -qiE '^[[:space:]]*H1[[:space:]]*=' "$conf" 2>/dev/null && has_h1=1
+  [ "$has_s1" = "1" ] && [ "$has_h1" = "1" ] && return 0
+
+  tmp="$conf.keen.$$"
+  awk '
+    BEGIN { added=0 }
+    /^[[:space:]]*\[Peer\]/ {
+      if (!added) {
+        print "S1 = 0"
+        print "S2 = 0"
+        print "S3 = 0"
+        print "S4 = 0"
+        print "H1 = 1"
+        print "H2 = 2"
+        print "H3 = 3"
+        print "H4 = 4"
+        added=1
+      }
+      print
+      next
+    }
+    { print }
+    END {
+      if (!added) {
+        print "S1 = 0"
+        print "S2 = 0"
+        print "S3 = 0"
+        print "S4 = 0"
+        print "H1 = 1"
+        print "H2 = 2"
+        print "H3 = 3"
+        print "H4 = 4"
+      }
+    }
+  ' "$conf" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$conf" 2>/dev/null || { cp -f "$tmp" "$conf"; rm -f "$tmp"; }
+  info "В conf добавлены S1–S4=0, H1–H4=1..4 (импорт Keenetic / Amnezia)."
+  return 0
+}
+
+# Conf для QR: стандартный вид + S/H (Amnezia) + MTU/DNS
+conf_for_qr() {
+
+  conf="$1"
+  [ -f "$conf" ] || return 1
+  _pk=$(grep -iE '^[[:space:]]*PrivateKey[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _addr=$(grep -iE '^[[:space:]]*Address[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _dns=$(grep -iE '^[[:space:]]*DNS[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _mtu=$(grep -iE '^[[:space:]]*MTU[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _jc=$(grep -iE '^[[:space:]]*Jc[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _jmin=$(grep -iE '^[[:space:]]*Jmin[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _jmax=$(grep -iE '^[[:space:]]*Jmax[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _i1=$(grep -iE '^[[:space:]]*I1[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _pub=$(grep -iE '^[[:space:]]*PublicKey[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _ep=$(grep -iE '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _aip=$(grep -iE '^[[:space:]]*AllowedIPs[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  _pka=$(grep -iE '^[[:space:]]*PersistentKeepalive[[:space:]]*=' "$conf" | head -1 | sed 's/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//')
+  [ -n "$_pk" ] && [ -n "$_pub" ] && [ -n "$_ep" ] || return 1
+  [ -n "$_dns" ] || _dns="1.1.1.1, 1.0.0.1"
+  [ -n "$_mtu" ] || _mtu="1280"
+  [ -n "$_aip" ] || _aip="0.0.0.0/0"
+  [ -n "$_pka" ] || _pka="25"
+  {
+    printf '%s\n' "[Interface]"
+    printf 'PrivateKey = %s\n' "$_pk"
+    [ -n "$_addr" ] && printf 'Address = %s\n' "$_addr"
+    printf 'DNS = %s\n' "$_dns"
+    printf 'MTU = %s\n' "$_mtu"
+    [ -n "$_jc" ] && printf 'Jc = %s\n' "$_jc"
+    [ -n "$_jmin" ] && printf 'Jmin = %s\n' "$_jmin"
+    [ -n "$_jmax" ] && printf 'Jmax = %s\n' "$_jmax"
+    [ -n "$_i1" ] && printf 'I1 = %s\n' "$_i1"
+    printf 'S1 = 0\nS2 = 0\nS3 = 0\nS4 = 0\n'
+    printf 'H1 = 1\nH2 = 2\nH3 = 3\nH4 = 4\n'
+    printf '%s\n' "[Peer]"
+    printf 'PublicKey = %s\n' "$_pub"
+    printf 'Endpoint = %s\n' "$_ep"
+    printf 'AllowedIPs = %s\n' "$_aip"
+    printf 'PersistentKeepalive = %s\n' "$_pka"
+  }
+}
+
+
+ensure_qrencode() {
+  export PATH="/opt/bin:/opt/sbin:${PATH}"
+  if command -v qrencode >/dev/null 2>&1 || [ -x /opt/bin/qrencode ]; then
+    return 0
+  fi
+  if ! command -v opkg >/dev/null 2>&1; then
+    error "Нет qrencode и нет opkg — QR недоступен."
+    return 1
+  fi
+  info "Установка qrencode (opkg install qrencode)…"
+  if ! opkg install qrencode 2>&1; then
+    warn "opkg install qrencode не удался — пробуем update…"
+    opkg update 2>/dev/null || true
+    if ! opkg install qrencode 2>&1; then
+      error "Не удалось установить qrencode."
+      return 1
+    fi
+  fi
+  hash -r 2>/dev/null || true
+  if ! command -v qrencode >/dev/null 2>&1 && [ ! -x /opt/bin/qrencode ]; then
+    error "qrencode установлен, но не найден в PATH."
+    return 1
+  fi
+  info "qrencode установлен."
+  return 0
+}
+
+
+# QR в терминал: -m 2 quiet zone, без пустых строк вокруг
+print_qr_file() {
+  f="$1"
+  _qr=qrencode
+  command -v qrencode >/dev/null 2>&1 || _qr=/opt/bin/qrencode
+  [ -x "$_qr" ] || _qr=/opt/bin/qrencode
+
+  ok=0
+  if "$_qr" -t ANSIUTF8 -m 2 -l L < "$f" 2>/dev/null; then
+    ok=1
+  elif "$_qr" -t UTF8 -m 2 -l L < "$f" 2>/dev/null; then
+    ok=1
+  elif "$_qr" -t ANSI -m 2 -l L < "$f" 2>/dev/null; then
+    ok=1
+  elif "$_qr" -t ASCII -m 2 -l L < "$f" 2>/dev/null; then
+    ok=1
+  fi
+  if [ "$ok" != "1" ]; then
+    error "qrencode не смог построить QR."
+    return 1
+  fi
+  return 0
+}
+
+do_show_conf() {
+  echo
+  info "Сохранённый конфиг"
+  if ! has_conf; then
+    error "Нет conf: $CONF_OUT (сначала п.3 scan)."
+    return 1
+  fi
+  ensure_conf_keenetic_fields "$CONF_OUT" || true
+  sz=$(wc -c < "$CONF_OUT" 2>/dev/null | tr -d ' ')
+  case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
+  info "Файл: $CONF_OUT (${sz} байт)"
+  echo
+  printf '%s\n' "${DIM}──────── $CONF_OUT ────────${NC}"
+  cat "$CONF_OUT" 2>/dev/null || true
+  echo
+  printf '%s\n' "${DIM}────────────────────────────${NC}"
+
+  _ep=$(grep -iE '^[[:space:]]*Endpoint[[:space:]]*=' "$CONF_OUT" 2>/dev/null | head -1 | sed 's/^[^=]*=[[:space:]]*//')
+  _addr=$(grep -iE '^[[:space:]]*Address[[:space:]]*=' "$CONF_OUT" 2>/dev/null | head -1 | sed 's/^[^=]*=[[:space:]]*//')
+  _jc=$(grep -iE '^[[:space:]]*Jc[[:space:]]*=' "$CONF_OUT" 2>/dev/null | head -1 | sed 's/^[^=]*=[[:space:]]*//')
+  _jmin=$(grep -iE '^[[:space:]]*Jmin[[:space:]]*=' "$CONF_OUT" 2>/dev/null | head -1 | sed 's/^[^=]*=[[:space:]]*//')
+  _jmax=$(grep -iE '^[[:space:]]*Jmax[[:space:]]*=' "$CONF_OUT" 2>/dev/null | head -1 | sed 's/^[^=]*=[[:space:]]*//')
+  _i1=$(grep -iE '^[[:space:]]*I1[[:space:]]*=' "$CONF_OUT" 2>/dev/null | head -1 | sed 's/^[^=]*=[[:space:]]*//')
+  echo
+  [ -n "$_ep" ] && info "Endpoint: $_ep"
+  [ -n "$_addr" ] && info "Address:  $_addr"
+  [ -n "$_jc" ] && info "Junk:     Jc=$_jc Jmin=${_jmin:-?} Jmax=${_jmax:-?}"
+  [ -n "$_i1" ] && info "I1:       $(show_i1_brief "$_i1")"
+
+  echo
+  if ! confirm_Y "Показать QR-код conf в терминале?"; then
+    return 0
+  fi
+
+  ensure_tmpdir
+  if ! ensure_qrencode; then
+    return 1
+  fi
+
+  # Компактный conf → меньше модулей QR (удобнее на телефоне)
+  qf="$TMPDIR/qr-conf.txt"
+  if ! conf_for_qr "$CONF_OUT" > "$qf" 2>/dev/null; then
+    warn "Сборка компактного conf не удалась — QR из файла как есть."
+    cp -f "$CONF_OUT" "$qf" 2>/dev/null || cat "$CONF_OUT" > "$qf"
+  else
+    info "QR: conf + S/H (Amnezia / WG Tunnel)"
+  fi
+
+  echo
+  print_qr_file "$qf" || return 1
+  return 0
+}
+
+main_menu() {
+  while true; do
+    clear 2>/dev/null || true
+    # --- шапка ---
+    printf '%s\n' "${CYAN}================================================${NC}"
+    printf '%s\n' "${CYAN}${BOLD}           warpscout  v${SCRIPT_VERSION}${NC}"
+    printf '%s\n' "${CYAN}================================================${NC}"
+    echo
+    printf '%s\n' "  ${BOLD}Поиск рабочих эндпоинтов Cloudflare WARP${NC}"
+    printf '%s\n' "  ${DIM}репозиторий  github.com/${GITHUB_REPO}${NC}"
+    printf '%s\n' "  ${DIM}upstream     github.com/${OFFICIAL_REPO}${NC}"
+    printf '%s\n' "  ${DIM}pin / bin    v${PIN_VERSION}  →  ${BIN}${NC}"
+    echo
+    show_status
+    echo
+    # --- основное ---
+    printf '%s\n' "${DIM}  ──────────────────────────────────────────${NC}"
+    echo "  1) Установка / обновление"
+    echo "  2) Создать аккаунт"
+    echo "  3) Поиск endpoint          ${DIM}scan → list + conf${NC}"
+    echo "  4) Подбор маскировки       ${DIM}junk (Jc/Jmin/I1)${NC}"
+    if has_conf; then
+      echo "  5) Применить conf          ${DIM}WireGuard / awg-manager${NC}"
+    else
+      printf '  %s5) Применить conf%s\n' "$DIM" "$NC"
+      printf '     %sнет conf — сначала скан%s\n' "$DIM" "$NC"
+    fi
+    echo "  6) Проверка туннеля"
+    if has_conf; then
+      echo "  7) Показать conf / QR"
+    else
+      printf '  %s7) Показать conf / QR%s\n' "$DIM" "$NC"
+      printf '     %sнет сохранённого conf%s\n' "$DIM" "$NC"
+    fi
+    printf '%s\n' "${DIM}  ──────────────────────────────────────────${NC}"
+    echo "  88) Удаление"
+    echo "  0)  Выход"
+    printf '%s\n' "${DIM}  ──────────────────────────────────────────${NC}"
+    echo
+    printf '  %sВыбор:%s ' "$BOLD" "$NC"
+    choice=$(read_choice)
+    echo
+    case "$choice" in
+      1) do_install; pause ;;
+      2) do_register; pause ;;
+      3) do_scan; pause ;;
+      4) do_find_junk; pause ;;
+      5)
+        do_apply_conf; pause
+        ;;
+      6) do_check_tunnel; pause ;;
+      7) do_show_conf; pause ;;
+      88) do_remove; pause ;;
+      0|"") info "Выход."; exit 0 ;;
+      *) warn "Неверный пункт"; pause ;;
+    esac
+  done
+}
+
+main_menu
