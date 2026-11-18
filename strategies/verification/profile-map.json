@@ -2922,6 +2922,47 @@
     ]
   },
   {
+    "config": "anti_throttle.conf",
+    "source": "dea1hwatcher/nfqws2-android:strategies/anti_throttle.conf",
+    "main_source_index": 0,
+    "custom_roles": [
+      "android custom profile 1"
+    ],
+    "source_profiles": 4,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-auto.lua",
+      "--blob=tls_google:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=quic_google:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=discord_udp:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443 --filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--lua-desync=fake:blob=tls_google:ip_autottl=-1,3-20:repeats=6:tcp_ack=-66000",
+      "--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=tls_google:tcp_ts_up",
+      "--payload=http_req",
+      "--lua-desync=fake:blob=tls_google:ip_autottl=-1,3-20:repeats=6:tcp_ack=-66000",
+      "--lua-desync=multisplit:pos=1,midsld:seqovl=1:seqovl_pattern=tls_google:tcp_ts_up"
+    ],
+    "quic": [
+      "--filter-udp=443 --filter-l7=quic",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=quic_google:repeats=8"
+    ],
+    "udp": [
+      "--filter-udp=3478-3481,19294-19344,50000-65535 --filter-l7=discord,stun",
+      "--payload=discord_ip_discovery,stun",
+      "--lua-desync=fake:blob=discord_udp:repeats=6",
+      "--lua-desync=udplen:increment=2:min=64"
+    ],
+    "custom": [
+      []
+    ],
+    "games": []
+  },
+  {
     "config": "circular.conf",
     "source": "general (CIRCULAR).bat",
     "main_source_index": 4,
@@ -5731,6 +5772,77 @@
     ]
   },
   {
+    "config": "fake_disorder.conf",
+    "source": "dea1hwatcher/nfqws2-android:strategies/fake_disorder.conf",
+    "main_source_index": 0,
+    "custom_roles": [
+      "android custom profile 1",
+      "android custom profile 2",
+      "android custom profile 3",
+      "android custom profile 4"
+    ],
+    "source_profiles": 7,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-custom.lua",
+      "--lua-gc=60",
+      "--blob=google_tls:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=quic_google:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443 --filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--out-range=-d10",
+      "--lua-desync=tls_fake_disorder:blob=google_tls:fakes=6",
+      "--payload=http_req",
+      "--out-range=-d10",
+      "--lua-desync=fake_disorder:blob=google_tls:fakes=4"
+    ],
+    "quic": [
+      "--filter-udp=443 --filter-l7=quic",
+      "--payload=quic_initial",
+      "--out-range=-d10",
+      "--lua-desync=fake:blob=quic_google"
+    ],
+    "udp": [
+      "--filter-udp=3478-3481,19294-19344,50000-65535 --filter-l7=discord,stun",
+      "--payload=discord_ip_discovery",
+      "--out-range=-d10",
+      "--lua-desync=fake:blob=quic_google"
+    ],
+    "custom": [
+      [
+        "--filter-tcp=2053,2083,2087,2096,8443 --filter-l7=tls",
+        "--out-range=-d10",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=google_tls:tcp_ts=-1000:repeats=7",
+        "--lua-desync=multisplit:pos=1,midsld:seqovl=681:seqovl_pattern=google_tls"
+      ],
+      [
+        "--filter-tcp=443 --filter-l7=tls",
+        "--ipset=/etc/nfqws2/lists/ipset_discord.list",
+        "--out-range=-d10",
+        "--payload=tls_client_hello",
+        "--lua-desync=tls_fake_disorder:blob=google_tls:fakes=3"
+      ],
+      [
+        "--filter-tcp=443 --filter-l7=tls",
+        "--hostlist-domains=youtube.com,googlevideo.com,google.com,ytimg.com,ggpht.com,googleapis.com",
+        "--out-range=-d10",
+        "--payload=tls_client_hello",
+        "--lua-desync=tls_fake_disorder:blob=google_tls:fakes=3"
+      ],
+      [
+        "--filter-udp=443,500,1701,2408,4443,4500,8095,8443",
+        "--ipset=/etc/nfqws2/lists/ipset_warp.list",
+        "--out-range=-d6",
+        "--lua-desync=fake:blob=quic_google:payload=all:repeats=1"
+      ]
+    ],
+    "games": []
+  },
+  {
     "config": "hostfakesplit-ts-alt.conf",
     "source": "general (HOSTFAKESPLIT TS ALT).bat",
     "main_source_index": 4,
@@ -6989,6 +7101,97 @@
     ]
   },
   {
+    "config": "nzapret.conf",
+    "source": "dea1hwatcher/nfqws2-android:strategies/nzapret.conf",
+    "main_source_index": 0,
+    "custom_roles": [
+      "android custom profile 1"
+    ],
+    "source_profiles": 4,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-auto.lua",
+      "--blob=quic_google:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=tls_google:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=discord_udp:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443 --filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--lua-desync=fake:blob=tls_google:tcp_ts=-100",
+      "--lua-desync=multisplit:seqovl=2:pos=midsld",
+      "--payload=http_req",
+      "--lua-desync=fake:blob=fake_default_http:tcp_ts=-100",
+      "--lua-desync=multisplit:seqovl=2:pos=midsld"
+    ],
+    "quic": [
+      "--filter-udp=443 --filter-l7=quic",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=quic_google:repeats=2"
+    ],
+    "udp": [
+      "--filter-udp=3478-3481,19294-19344,50000-65535 --filter-l7=discord,stun",
+      "--payload=discord_ip_discovery,stun",
+      "--lua-desync=fake:blob=discord_udp:repeats=6"
+    ],
+    "custom": [
+      []
+    ],
+    "games": []
+  },
+  {
+    "config": "rostelecom.conf",
+    "source": "dea1hwatcher/nfqws2-android:strategies/rostelecom.conf",
+    "main_source_index": 0,
+    "custom_roles": [
+      "android custom profile 1",
+      "android custom profile 2"
+    ],
+    "source_profiles": 5,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-auto.lua",
+      "--lua-init=@/etc/nfqws2/lua/custom_funcs.lua",
+      "--blob=quic_google:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=tls_google:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=tls_max:@/etc/nfqws2/blobs/tls_clienthello_max_ru.bin",
+      "--blob=stun_fake:@/etc/nfqws2/blobs/stun.bin",
+      "--blob=discord_udp:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443 --filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--lua-desync=multidisorder:pos=1,host+2,sld+2,sld+5,sniext+1,sniext+2,endhost-2:seqovl=1",
+      "--payload=http_req",
+      "--lua-desync=multidisorder:pos=1,host+2,sld+2,sld+5,sniext+1,sniext+2,endhost-2:seqovl=1"
+    ],
+    "quic": [
+      "--filter-udp=443 --filter-l7=quic",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=quic_google:ip_autottl=-2,3-20:ip6_autottl=-2,3-20:repeats=10:payload=all"
+    ],
+    "udp": [
+      "--filter-udp=3478-3481,19294-19344,50000-65535 --filter-l7=discord,stun",
+      "--payload=discord_ip_discovery,stun",
+      "--lua-desync=fake:blob=discord_udp:repeats=6"
+    ],
+    "custom": [
+      [
+        "--filter-tcp=2053,2083,2087,2096,8443 --filter-l7=tls --hostlist-domains=discord.media",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=2:tls_mod=none"
+      ],
+      [
+        "--filter-tcp=443 --filter-l7=tls --hostlist-domains=signal.org,matrix.org,simplex.chat,zapret.moe",
+        "--payload=tls_client_hello",
+        "--lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-1000:tcp_md5:repeats=4"
+      ]
+    ],
+    "games": []
+  },
+  {
     "config": "simple-fake-alt.conf",
     "source": "general (SIMPLE FAKE ALT).bat",
     "main_source_index": 4,
@@ -8193,6 +8396,238 @@
         "--lua-desync=fake:blob=quic_initial_4pda_to:repeats=10:payload=all"
       ]
     ]
+  },
+  {
+    "config": "universal_v12.conf",
+    "source": "dea1hwatcher/nfqws2-android:strategies/universal_v12.conf",
+    "main_source_index": 0,
+    "custom_roles": [
+      "android custom profile 1"
+    ],
+    "source_profiles": 4,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-auto.lua",
+      "--lua-init=@/etc/nfqws2/lua/custom_funcs.lua",
+      "--blob=tls_google:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=tls_4pda:@/etc/nfqws2/blobs/tls_clienthello_4pda_to.bin",
+      "--blob=quic_google:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=discord_udp:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443 --filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--lua-desync=fake:blob=tls_google:ip_autottl=-1,3-20:ip6_autottl=-1,3-20:repeats=6:tcp_ack=-66000",
+      "--lua-desync=multidisorder:pos=1,host+2,sld+2,sld+5,sniext+1,sniext+2,endhost-2",
+      "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_4pda",
+      "--payload=http_req",
+      "--lua-desync=fake:blob=tls_google:ip_autottl=-1,3-20:repeats=6:tcp_ack=-66000",
+      "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_4pda"
+    ],
+    "quic": [
+      "--filter-udp=443 --filter-l7=quic",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=quic_google:ip_autottl=-2,3-20:ip6_autottl=-2,3-20:repeats=8"
+    ],
+    "udp": [
+      "--filter-udp=3478-3481,19294-19344,50000-65535 --filter-l7=discord,stun",
+      "--payload=discord_ip_discovery,stun",
+      "--lua-desync=fake:blob=discord_udp:repeats=6",
+      "--lua-desync=udplen:increment=2:min=64"
+    ],
+    "custom": [
+      []
+    ],
+    "games": []
+  },
+  {
+    "config": "universal_v13.conf",
+    "source": "dea1hwatcher/nfqws2-android:strategies/universal_v13.conf",
+    "main_source_index": 0,
+    "custom_roles": [
+      "android custom profile 1",
+      "android custom profile 2"
+    ],
+    "source_profiles": 5,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-auto.lua",
+      "--lua-init=@/etc/nfqws2/lua/custom_funcs.lua",
+      "--blob=tls_google:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=tls_4pda:@/etc/nfqws2/blobs/tls_clienthello_4pda_to.bin",
+      "--blob=quic_google:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=discord_udp:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443 --filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--lua-desync=fake:blob=tls_google:ip_autottl=-1,3-20:ip6_autottl=-1,3-20:repeats=6:tcp_ack=-66000",
+      "--lua-desync=multidisorder:pos=1,host+2,sld+2,sld+5,sniext+1,sniext+2,endhost-2",
+      "--payload=http_req",
+      "--lua-desync=fake:blob=tls_google:ip_autottl=-1,3-20:repeats=6:tcp_ack=-66000",
+      "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_4pda"
+    ],
+    "quic": [
+      "--filter-udp=443 --filter-l7=quic",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=quic_google:ip_autottl=-2,3-20:ip6_autottl=-2,3-20:repeats=8"
+    ],
+    "udp": [
+      "--filter-udp=3478-3481,19294-19344,50000-65535 --filter-l7=discord,stun",
+      "--payload=discord_ip_discovery,stun",
+      "--lua-desync=fake:blob=discord_udp:repeats=6",
+      "--lua-desync=udplen:increment=2:min=64"
+    ],
+    "custom": [
+      [
+        "--filter-tcp=80,443 --filter-l7=tls",
+        "--hostlist-domains=x.com,t.co,twimg.com,twitter.com,abs.twimg.com,pbs.twimg.com,video.twimg.com,api.x.com",
+        "--out-range=-d8",
+        "--payload=tls_client_hello",
+        "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_4pda"
+      ],
+      [
+        "--filter-tcp=80,443 --filter-l7=tls",
+        "--ipset=/etc/nfqws2/lists/ipset_twitter.list",
+        "--out-range=-d8",
+        "--payload=tls_client_hello",
+        "--lua-desync=multisplit:pos=1:seqovl=568:seqovl_pattern=tls_4pda"
+      ]
+    ],
+    "games": []
+  },
+  {
+    "config": "z2r_rocket.conf",
+    "source": "dea1hwatcher/nfqws2-android:strategies/z2r_rocket.conf",
+    "main_source_index": 0,
+    "custom_roles": [
+      "android custom profile 1",
+      "android custom profile 2",
+      "android custom profile 3"
+    ],
+    "source_profiles": 6,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-custom.lua",
+      "--lua-gc=60",
+      "--blob=google_tls:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=tls_max:@/etc/nfqws2/blobs/tls_clienthello_max_ru.bin",
+      "--blob=quic_google:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=discord_udp:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443 --filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--hostlist-domains=youtube.com,googlevideo.com,google.com,ytimg.com,ggpht.com,googleapis.com",
+      "--out-range=-d10",
+      "--lua-desync=fake:blob=google_tls:repeats=6:fooling=badsum",
+      "--lua-desync=multidisorder:pos=2,5,105,host+5,sld-1,endsld-5,endsld",
+      "--new",
+      "--filter-tcp=80,443 --filter-l7=tls",
+      "--payload=tls_client_hello",
+      "--out-range=-d10",
+      "--lua-desync=fake:blob=tls_max:repeats=6:fooling=badsum",
+      "--lua-desync=multisplit:pos=1:fooling=tcp_seq=1000000",
+      "--new",
+      "--filter-tcp=80 --filter-l7=http",
+      "--payload=http_req",
+      "--out-range=-d10",
+      "--lua-desync=fake:blob=google_tls:repeats=4:fooling=badsum",
+      "--lua-desync=multidisorder:pos=1,midsld"
+    ],
+    "quic": [
+      "--filter-udp=443 --filter-l7=quic",
+      "--payload=quic_initial",
+      "--out-range=-d10",
+      "--lua-desync=fake:blob=quic_google:repeats=3:ipfrag:ipfrag_pos_udp=8",
+      "--lua-desync=udplen:increment=8:pattern=0xFEA82025"
+    ],
+    "udp": [
+      "--filter-udp=3478-3481,19294-19344,50000-65535 --filter-l7=discord,stun",
+      "--payload=discord_ip_discovery,stun",
+      "--out-range=-d10",
+      "--lua-desync=fake:blob=discord_udp:repeats=6"
+    ],
+    "custom": [
+      [
+        "--filter-tcp=2053,2083,2087,2096,8443 --filter-l7=tls",
+        "--out-range=-d10",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_max:repeats=6:fooling=tcp_ts=-600000,badsum",
+        "--lua-desync=multisplit:pos=1:fooling=tcp_seq=1000000"
+      ],
+      [
+        "--filter-tcp=443 --filter-l7=tls",
+        "--ipset=/etc/nfqws2/lists/ipset_discord.list",
+        "--out-range=-d10",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_max:repeats=6:fooling=badsum",
+        "--lua-desync=multidisorder:pos=1,midsld"
+      ],
+      [
+        "--filter-udp=443,500,1701,2408,4443,4500,8095,8443",
+        "--ipset=/etc/nfqws2/lists/ipset_warp.list",
+        "--out-range=-d6",
+        "--lua-desync=fake:blob=quic_google:payload=all:repeats=1"
+      ]
+    ],
+    "games": []
+  },
+  {
+    "config": "z_attacker.conf",
+    "source": "dea1hwatcher/nfqws2-android:strategies/z_attacker.conf",
+    "main_source_index": 0,
+    "custom_roles": [
+      "android custom profile 1",
+      "android custom profile 2"
+    ],
+    "source_profiles": 5,
+    "base": [
+      "--lua-init=@/etc/nfqws2/lua/zapret-lib.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-antidpi.lua",
+      "--lua-init=@/etc/nfqws2/lua/zapret-auto.lua",
+      "--blob=quic_google:@/etc/nfqws2/blobs/quic_initial_www_google_com.bin",
+      "--blob=tls_google:@/etc/nfqws2/blobs/tls_clienthello_www_google_com.bin",
+      "--blob=tls_4pda:@/etc/nfqws2/blobs/tls_clienthello_4pda_to.bin",
+      "--blob=tls_max:@/etc/nfqws2/blobs/tls_clienthello_max_ru.bin",
+      "--blob=discord_udp:@/etc/nfqws2/blobs/quic_initial_steamcommunity_com.bin"
+    ],
+    "main": [
+      "--filter-tcp=80,443 --filter-l7=http,tls",
+      "--payload=tls_client_hello",
+      "--lua-desync=synack:repeats=2",
+      "--lua-desync=wsize:wsize=58400",
+      "--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=3:tls_mod=none:ip_id=zero",
+      "--payload=http_req",
+      "--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=3:tls_mod=none:ip_id=zero"
+    ],
+    "quic": [
+      "--filter-udp=443 --filter-l7=quic",
+      "--payload=quic_initial",
+      "--lua-desync=fake:blob=quic_google:repeats=6"
+    ],
+    "udp": [
+      "--filter-udp=3478-3481,19294-19344,50000-65535 --filter-l7=discord,stun",
+      "--payload=discord_ip_discovery,stun",
+      "--lua-desync=fake:blob=discord_udp:repeats=6"
+    ],
+    "custom": [
+      [
+        "--filter-tcp=2053,2083,2087,2096,8443 --filter-l7=tls --hostlist-domains=discord.media",
+        "--payload=tls_client_hello",
+        "--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=2:tls_mod=none"
+      ],
+      [
+        "--filter-tcp=443 --filter-l7=tls --hostlist=/etc/nfqws2/lists/google.list",
+        "--payload=tls_client_hello",
+        "--lua-desync=wsize:wsize=64240:scale=1",
+        "--lua-desync=fake:blob=tls_google:repeats=6:tcp_seq=2:tls_mod=none:ip_id=zero"
+      ]
+    ],
+    "games": []
   },
   {
     "config": "general.conf",

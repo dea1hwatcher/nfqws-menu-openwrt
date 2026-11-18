@@ -159,6 +159,16 @@
       "effective_active_profiles": 11
     },
     {
+      "config": "anti_throttle.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 4,
+      "note": "Ported from dea1hwatcher/nfqws2-android; custom Lua helpers required; not tested on router"
+    },
+    {
       "config": "circular.conf",
       "shell_syntax": "PASS",
       "shell_expansion": "PASS",
@@ -344,6 +354,16 @@
       "effective_active_profiles": 11
     },
     {
+      "config": "fake_disorder.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 7,
+      "note": "Ported from dea1hwatcher/nfqws2-android; custom Lua helpers required; not tested on router"
+    },
+    {
       "config": "hostfakesplit-ts-alt.conf",
       "shell_syntax": "PASS",
       "shell_expansion": "PASS",
@@ -444,6 +464,26 @@
       "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args"
     },
     {
+      "config": "nzapret.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 4,
+      "note": "Ported from dea1hwatcher/nfqws2-android; custom Lua helpers required; not tested on router"
+    },
+    {
+      "config": "rostelecom.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 5,
+      "note": "Ported from dea1hwatcher/nfqws2-android; custom Lua helpers required; not tested on router"
+    },
+    {
       "config": "simple-fake-alt.conf",
       "shell_syntax": "PASS",
       "shell_expansion": "PASS",
@@ -521,6 +561,46 @@
       "note": "Порт из kinlay0/zapret2-discord-youtube-strats v1.1.5; Game Filter лежит отдельно в game-profiles/*.args; требует --ipcache-hostname (SYN до известного имени хоста)"
     },
     {
+      "config": "universal_v12.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 4,
+      "note": "Ported from dea1hwatcher/nfqws2-android; custom Lua helpers required; not tested on router"
+    },
+    {
+      "config": "universal_v13.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 5,
+      "note": "Ported from dea1hwatcher/nfqws2-android; custom Lua helpers required; not tested on router"
+    },
+    {
+      "config": "z2r_rocket.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 6,
+      "note": "Ported from dea1hwatcher/nfqws2-android; custom Lua helpers required; not tested on router"
+    },
+    {
+      "config": "z_attacker.conf",
+      "shell_syntax": "PASS",
+      "shell_expansion": "PASS",
+      "service_settings": "PASS",
+      "blob_and_list_references": "PASS",
+      "source_strategy_sequences": "PASS",
+      "effective_active_profiles": 5,
+      "note": "Ported from dea1hwatcher/nfqws2-android; custom Lua helpers required; not tested on router"
+    },
+    {
       "config": "general.conf",
       "shell_syntax": "PASS",
       "shell_expansion": "PASS",
@@ -531,7 +611,7 @@
     }
   ],
   "lua_syntax": "PASS: LuaJIT 2.1 compilation of four files",
-  "original_strategy_profiles_preserved": 492,
+  "original_strategy_profiles_preserved": 532,
   "source_blobs": "PASS: byte-identical",
   "native_nfqws2_dry_run": "Not run; target Linux/Netcraze runtime unavailable",
   "router_network_test": "Not run",

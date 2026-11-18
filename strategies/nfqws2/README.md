@@ -4,7 +4,7 @@
 
 Подготовлены [@Nare51](https://github.com/Nare51) с использованием ИИ.
 
-В каталоге **55** `.conf`: **22** стандартных из Flowseal 1.10.4, **33** порта из [kinlay0/zapret2-discord-youtube-strats](https://github.com/kinlay0/zapret2-discord-youtube-strats) v1.1.5 (`alt14`…`syndata` и остальные) и отдельные кастомные конфиги сообщества (`MartinBacker`, `Uvvi2`, `alt4_mod`, `eduncey`, `hardcorp74`, `krushaaa` — не входят в комплект).
+В каталоге **63** `.conf`: **22** стандартных из Flowseal 1.10.4, **33** порта из [kinlay0/zapret2-discord-youtube-strats](https://github.com/kinlay0/zapret2-discord-youtube-strats) v1.1.5, **8** портов из [dea1hwatcher/nfqws2-android](https://github.com/dea1hwatcher/nfqws2-android) (кроме `smart` и `tr_*`) и отдельные кастомные конфиги сообщества (`MartinBacker`, `Uvvi2`, `alt4_mod`, `eduncey`, `hardcorp74`, `krushaaa` — не входят в комплект).
 
 Формат соответствует службе nfqws2: `NFQWS_BASE_ARGS`, `NFQWS_ARGS`, `NFQWS_ARGS_QUIC`, `NFQWS_ARGS_UDP`, `MODE_LIST` / `MODE_ALL` / `MODE_AUTO`, `NFQWS_EXTRA_ARGS`, `NFQWS_ARGS_IPSET`, `NFQWS_ARGS_CUSTOM` и служебные настройки. Отдельный run.sh не нужен.
 
@@ -20,7 +20,7 @@
 - **`NFQWS_ARGS_IPSET` пустой** — общая HTTP(S)/QUIC-стратегия не копируется службой автоматически. Исходные IP-профили с собственными списками и методами вынесены в `NFQWS_ARGS_CUSTOM` (в т.ч. 8443, особенности ALT7/EXP).
 - Game Filter **выключен**. Полные игровые фрагменты — в `game-profiles/*.args` (не самостоятельные конфиги; при включении не ставить диапазон 1024–65535 в начало CUSTOM).
 
-Все 55 стратегий (22 из Flowseal + 33 из kinlay0) и цепочки 492 профиля сохранены без смягчения repeats / split-pos / seqovl / cutoff / fooling / порядка fake и выбора blobs. Для Discord/game используются blobs из BAT 1.10.4, не произвольные alias.
+Все 63 стратегии (22 из Flowseal + 33 из kinlay0 + 8 из nfqws2-android) и цепочки 532 профиля сохранены без смягчения repeats / split-pos / seqovl / cutoff / fooling / порядка fake и выбора blobs. Для Discord/game используются blobs из BAT 1.10.4, не произвольные alias.
 
 Особенности отдельных стратегий:
 
@@ -33,6 +33,7 @@
 - Порты kinlay0 с именами, уже занятыми Flowseal (`EXP`, `FAKE TLS AUTO`, `SIMPLE FAKE*`), сохранены как `k0-*.conf` — исходные конфиги не затирались.
 - Для kinlay0 добавлены полные блобы `tls_clienthello_firpo_ru.bin` (1830 Б), `tls_clienthello_retext_ai.bin` (1783 Б), `tls_clienthello_steam_chat_com_full.bin` (1889 Б) и `tls_clienthello_teamspeak_com_full.bin` (1892 Б). Заглушки 1100 Б, используемые старыми конфигами, не тронуты.
 - `circular` / `circular1`: профиль `ip tls` **не разделён** на 8443 и 80/443 — в нём находятся `--lua-desync=circular` и теги `strategy=N`, дублирование профиля нарушило бы ротацию. `ch_clone` — динамический ключ `tls_client_hello_clone`, а не файл блоба.
+- Порты из `nfqws2-android` используют кастомные Lua (`zapret-custom.lua`, `custom_funcs.lua`) и списки `ipset_warp.list` / `ipset_twitter.list`; файлы перенесены в `strategies/lua/` и `strategies/lists/`. Пути `$LUA_DIR`/`$BLOBS_DIR`/`$LISTS_DIR`/`$LOG_DIR` заменены на `/etc/nfqws2/...` и `/opt/var/log`. `ACTIVE_DISCORD_UDP.bin` / `discord_udp.bin` заменены на идентичный по хэшу `quic_initial_steamcommunity_com.bin`.
 
 ## Таблица стратегий
 
@@ -93,6 +94,14 @@
 | general (SIMPLE FAKE).bat | `simple_fake.conf` | fake + Google hostfakesplit, ts |
 | general (SIMPLE FAKE ALT).bat | `simple_fake_alt.conf` | только fake, badseq +2 |
 | general (SIMPLE FAKE ALT2).bat | `simple_fake_alt2.conf` | только fake (max.ru), ts |
+| `strategies/anti_throttle.conf` (android) | `anti_throttle.conf` | Zephyron: fake + multisplit + udplen |
+| `strategies/fake_disorder.conf` (android) | `fake_disorder.conf` | TheFirstNoob: fake + fake_disorder + multisplit + tls_fake_disorder; нужен кастомный Lua |
+| `strategies/nzapret.conf` (android) | `nzapret.conf` | nfqws2-android: fake + multisplit |
+| `strategies/rostelecom.conf` (android) | `rostelecom.conf` | Flowseal/zapretgui: fake + hostfakesplit + multidisorder; нужен кастомный Lua |
+| `strategies/universal_v12.conf` (android) | `universal_v12.conf` | Zephyron: fake + multidisorder + multisplit + udplen; нужен кастомный Lua |
+| `strategies/universal_v13.conf` (android) | `universal_v13.conf` | RixyPow: fake + multidisorder + multisplit + udplen; нужен кастомный Lua |
+| `strategies/z2r_rocket.conf` (android) | `z2r_rocket.conf` | IndeecFOX: fake + multidisorder + multisplit + udplen; нужен кастомный Lua |
+| `strategies/z_attacker.conf` (android) | `z_attacker.conf` | GAME-OVER-op: fake + synack + wsize |
 
 ## Как ставить (через меню или вручную)
 
