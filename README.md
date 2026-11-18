@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.2.2**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.2.3**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -376,6 +376,12 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ---
 
 ## Changelog
+
+### 0.2.3
+
+- **Стратегии kinlay0** — полностью портирован [`kinlay0/zapret2-discord-youtube-strats`](https://github.com/kinlay0/zapret2-discord-youtube-strats) v1.1.5: 33 `.conf` (`alt14`…`syndata`, `circular*`, `exp1`–`exp5`, `double-fake*`, `fake-tls-auto-alt4/5/6`, `hostfakesplit-ts*`, `legacy*`, `simple-fake-alt3/4`, `single-fake*`, `k0-*`). Всего в репозитории **55 стратегий / 492 профиля** по данным [`strategies/verification/`](strategies/verification/).
+- **Блобы** — добавлены `tls_clienthello_firpo_ru.bin`, `tls_clienthello_retext_ai.bin` и полные версии `tls_clienthello_steam_chat_com_full.bin` / `tls_clienthello_teamspeak_com_full.bin`. Заглушки 1100 Б, используемые прежними портами, не изменены.
+- **Особенности портирования** — `ch_clone` оставлен динамическим ключом `tls_client_hello_clone`, а не файлом; в `circular` / `circular1` профиль `ip tls` не разделён, чтобы не дублировать `strategy=N`; стратегии с именами, уже занятыми Flowseal, сохранены как `k0-*.conf`. Игровые фрагменты лежат в `game-profiles/*.args` и по умолчанию выключены.
 
 ### 0.2.2
 
