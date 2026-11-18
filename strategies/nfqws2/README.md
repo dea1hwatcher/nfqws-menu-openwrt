@@ -69,15 +69,16 @@
 
 ### Проверка на устройстве (опционально)
 
-<<<<<<< HEAD
+Вариант для OpenWrt (пути `/etc/...`):
+
 1. Скопировать `bin\*.bin` из бандла в `/etc/nfqws2/blobs/`.
 2. `lists\list-google.txt` → `/etc/nfqws2/lists/google.list`,
    `list-general*.txt` → `user.list`, `list-exclude*.txt` → `exclude.list`,
    `ipset-all.txt` → `ipset.list`, `ipset-exclude*.txt` → `ipset_exclude.list`.
 3. Выбранный `.conf` → `/etc/nfqws2/nfqws2.conf`, поправить `ISP_INTERFACE`.
 4. `/etc/init.d/nfqws2-keenetic restart`
-=======
-Файлы в `strategies/verification/`:
+
+Вариант для Keenetic / Entware — скрипт проверки из `strategies/verification/`:
 
 ```sh
 sh strategies/verification/check-on-device.sh /opt/etc/nfqws2/nfqws2.conf --dry-run
@@ -85,7 +86,6 @@ sh strategies/verification/check-on-device.sh /opt/etc/nfqws2/nfqws2.conf --inte
 ```
 
 При необходимости: `NFQWS2_BIN=/opt/sbin/nfqws2`. Порядок аргументов в проверке: BASE, CUSTOM, UDP, QUIC + EXTRA, HTTP(S) + EXTRA.
->>>>>>> upstream/main
 
 ## Таблица соответствий winws1 → nfqws2
 
@@ -111,13 +111,9 @@ sh strategies/verification/check-on-device.sh /opt/etc/nfqws2/nfqws2.conf --inte
 | `--wf-tcp=` / `--wf-udp=` | `TCP_PORTS` / `UDP_PORTS` |
 | `--hostlist=` / `--ipset=` | `MODE_*` / профили в `NFQWS_ARGS_CUSTOM` (здесь `NFQWS_ARGS_IPSET` пустой) |
 
-<<<<<<< HEAD
 Числа `seqovl` — это ровно размеры блобов: `tls_clienthello_www_google_com.bin` = 681 б,
 `tls_clienthello_www_sferum_ru.bin` = 664 б, `stun2.bin` = 120 б (в EXP берётся 480 — приставка
 длиннее блоба, добивается повторами/нулями).
-=======
-Типичные размеры блобов для `seqovl`: `tls_clienthello_www_google_com.bin` ≈ 681, `tls_clienthello_www_sferum_ru.bin` ≈ 664, `stun2.bin` = 120 (в EXP seqovl=480 — длиннее блоба, добивается повторами).
->>>>>>> upstream/main
 
 ## Что важно знать
 
